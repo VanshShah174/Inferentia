@@ -1,0 +1,138 @@
+# =============================================================================
+# vllm-inference — Default Values (Dev Environment)
+# =============================================================================
+# These values are the baseline. Override per environment:
+#   Dev:  values.yaml (this file)
+#   Prod: values-prod.yaml
+# =============================================================================
+
+# -- Namespace
+namespace: inference
+
+# -- Model Configuration
+model:
+  name: "Qwen/Qwen2.5-0.5B-Instruct"
+  revision: "main"
+  # Source for model download job (s3:// or huggingface)
+  source: "huggingface"
+  # S3 bucket (used when source: s3)
+  s3Bucket: ""
+  s3Key: ""
+
+# -- Container Image
+image:
+  repository: inferentia/vllm-cpu
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# -- Model Downloader Job
+modelDownloader:
+  enabled: true
+  image:
+    repository: python
+    tag: "3.11-slim"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+
+# -- vLLM Serving Configuration
+serving:
+  replicas: 1
+  dtype: "bfloat16"
+  maxModelLen: 512
+  enforceEager: true
+  port: 8000
+  # Environment variables
+  env:
+    VLLM_CPU_KVCACHE_SPACE: "1"
+    VLLM_TARGET_DEVICE: "cpu"
+    TOKENIZERS_PARALLELISM: "false"
+
+# -- Resource Requests and Limits
+resources:
+  requests:
+    cpu: "2"
+    memory: "4Gi"
+  limits:
+    cpu: "4"
+    memory: "8Gi"
+
+# -- Persistent Volume (model weights storage)
+persistence:
+  enabled: true
+  storageClass: ""  # Uses cluster default (gp3 on EKS)
+  size: 5Gi
+  accessMode: ReadWriteOnce
+
+# -- Shared Memory (required by vLLM for IPC)
+shmSize: 1Gi
+
+# -- Health Probes
+probes:
+  readiness:
+    path: /health
+    port: 8000
+    initialDelaySeconds: 120
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  liveness:
+    path: /health
+    port: 8000
+    initialDelaySeconds: 180
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 5
+
+# -- Service
+service:
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+
+# -- ServiceMonitor (Prometheus scraping)
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  path: /metrics
+
+# -- Autoscaling (HPA stub — KEDA in production)
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetKVCacheUtilization: 70
+
+# -- Pod Security Context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# -- Container Security Context
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false  # vLLM needs to write to cache dirs
+  capabilities:
+    drop:
+      - ALL
+
+# -- Node Selector (for targeting inference nodes)
+nodeSelector: {}
+  # node-role: inference
+
+# -- Tolerations
+tolerations: []
+
+# -- Affinity
+affinity: {}
+
+# -- Labels applied to all resources
+commonLabels:
+  app.kubernetes.io/part-of: inferentia
+  app.kubernetes.io/component: inference

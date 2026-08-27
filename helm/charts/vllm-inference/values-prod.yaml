@@ -1,0 +1,92 @@
+# =============================================================================
+# vllm-inference — Production Values Override
+# =============================================================================
+# These values override the defaults in values.yaml for production deployment.
+# Applied via: helm install -f values.yaml -f values-prod.yaml
+# Or via ArgoCD ApplicationSet targeting the prod branch.
+#
+# Key differences from dev:
+#   - More replicas
+#   - Larger model context window
+#   - Autoscaling enabled
+#   - Higher resource limits
+#   - ECR image (not local)
+#   - Node selector for inference nodes
+# =============================================================================
+
+# -- Container Image (from ECR, signed by CI)
+image:
+  repository: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/inferentia/vllm-cpu
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# -- Model Configuration
+model:
+  name: "Qwen/Qwen2.5-0.5B-Instruct"
+  revision: "main"
+  source: "s3"
+  s3Bucket: "inferentia-models-prod"
+  s3Key: "models/Qwen2.5-0.5B-Instruct/"
+
+# -- vLLM Serving Configuration (production tuned)
+serving:
+  replicas: 2
+  dtype: "bfloat16"
+  maxModelLen: 2048
+  enforceEager: true
+  port: 8000
+  env:
+    VLLM_CPU_KVCACHE_SPACE: "4"
+    VLLM_TARGET_DEVICE: "cpu"
+    TOKENIZERS_PARALLELISM: "false"
+
+# -- Resource Requests and Limits (production sized nodes)
+resources:
+  requests:
+    cpu: "4"
+    memory: "8Gi"
+  limits:
+    cpu: "8"
+    memory: "16Gi"
+
+# -- Persistent Volume (larger for production models)
+persistence:
+  enabled: true
+  storageClass: "gp3"
+  size: 10Gi
+  accessMode: ReadWriteOnce
+
+# -- Shared Memory
+shmSize: 2Gi
+
+# -- Autoscaling (enabled in production)
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetKVCacheUtilization: 70
+
+# -- Node Selector (target inference node group)
+nodeSelector:
+  node-role: inference
+
+# -- Tolerations (inference nodes may have taints)
+tolerations:
+  - key: "workload"
+    operator: "Equal"
+    value: "inference"
+    effect: "NoSchedule"
+
+# -- Affinity (spread pods across AZs)
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - vllm-inference
+          topologyKey: topology.kubernetes.io/zone
