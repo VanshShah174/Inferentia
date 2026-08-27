@@ -1,0 +1,171 @@
+# =============================================================================
+# Deployment — vLLM Inference Pods
+# =============================================================================
+# The core workload. Each pod:
+#   1. Init Container: Validates model files exist on PVC before starting
+#   2. Main Container: vLLM serves the model via OpenAI-compatible API
+#
+# Mount strategy:
+#   - PVC (model weights): read-only at /models
+#   - emptyDir (shared memory): mounted at /dev/shm for vLLM IPC
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vllm-inference.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.serving.replicas }}
+  selector:
+    matchLabels:
+      {{- include "vllm-inference.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vllm-inference.selectorLabels" . | nindent 8 }}
+        {{- with .Values.commonLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Force pod restart on config change
+        checksum/config: {{ include (print $.Template.BasePath "/deployment.yaml") . | sha256sum | trunc 8 }}
+    spec:
+      # -- Pod Security Context
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+
+      # -- Node placement
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      # =====================================================================
+      # Init Container: Wait for model to be available on PVC
+      # =====================================================================
+      initContainers:
+        - name: wait-for-model
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for model at {{ include "vllm-inference.modelPath" . }}/config.json ..."
+              RETRIES=0
+              MAX_RETRIES=60
+              while [ ! -f "{{ include "vllm-inference.modelPath" . }}/config.json" ]; do
+                RETRIES=$((RETRIES + 1))
+                if [ $RETRIES -ge $MAX_RETRIES ]; then
+                  echo "ERROR: Model not found after $MAX_RETRIES attempts. Exiting."
+                  exit 1
+                fi
+                echo "Attempt $RETRIES/$MAX_RETRIES — model not ready yet, waiting 10s..."
+                sleep 10
+              done
+              echo "Model found. Proceeding to start vLLM."
+          volumeMounts:
+            - name: model-weights
+              mountPath: /models
+              readOnly: true
+
+      # =====================================================================
+      # Main Container: vLLM Inference Engine
+      # =====================================================================
+      containers:
+        - name: vllm
+          image: {{ include "vllm-inference.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          # -- Security
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+
+          # -- vLLM serve arguments
+          args:
+            - "{{ .Values.model.name }}"
+            - "--dtype"
+            - "{{ .Values.serving.dtype }}"
+            - "--max-model-len"
+            - "{{ .Values.serving.maxModelLen }}"
+            {{- if .Values.serving.enforceEager }}
+            - "--enforce-eager"
+            {{- end }}
+            - "--port"
+            - "{{ .Values.serving.port }}"
+            {{- if .Values.persistence.enabled }}
+            - "--download-dir"
+            - "/models"
+            {{- end }}
+
+          # -- Environment variables
+          env:
+            {{- range $key, $value := .Values.serving.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            - name: HF_HOME
+              value: "/home/vllm/.cache/huggingface"
+
+          # -- Ports
+          ports:
+            - name: http
+              containerPort: {{ .Values.serving.port }}
+              protocol: TCP
+
+          # -- Resource limits
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          # -- Health probes
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: {{ .Values.probes.readiness.port }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: {{ .Values.probes.liveness.port }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+
+          # -- Volume mounts
+          volumeMounts:
+            - name: model-weights
+              mountPath: /models
+              readOnly: true
+            - name: dshm
+              mountPath: /dev/shm
+
+      # =====================================================================
+      # Volumes
+      # =====================================================================
+      volumes:
+        # Model weights from PVC (downloaded by Job)
+        - name: model-weights
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "vllm-inference.pvcName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        # Shared memory for vLLM inter-process communication
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.shmSize }}

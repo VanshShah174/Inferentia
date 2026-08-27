@@ -1,0 +1,25 @@
+{{- if .Values.persistence.enabled }}
+# =============================================================================
+# PersistentVolumeClaim — Model Weights Storage
+# =============================================================================
+# This PVC holds the downloaded model weights. The model-download Job writes
+# to it once, then all vLLM pods mount it read-only for fast startup.
+# On EKS: backed by EBS gp3 (or EFS for ReadWriteMany if scaling beyond 1 AZ)
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "vllm-inference.pvcName" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.accessMode }}
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+{{- end }}

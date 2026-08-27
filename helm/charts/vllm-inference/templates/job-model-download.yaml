@@ -1,0 +1,79 @@
+{{- if and .Values.persistence.enabled .Values.modelDownloader.enabled }}
+# =============================================================================
+# Job — Model Download (One-Time)
+# =============================================================================
+# Downloads model weights from HuggingFace (or S3) to the PVC.
+# Runs once. vLLM pods wait (via init container) until this completes.
+# On re-runs: uses helm.sh/hook to avoid re-creating if model exists.
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vllm-inference.fullname" . }}-model-download
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-downloader
+  annotations:
+    # Helm hook: runs before the deployment is created
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "vllm-inference.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: model-downloader
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: model-downloader
+          image: "{{ .Values.modelDownloader.image.repository }}:{{ .Values.modelDownloader.image.tag }}"
+          resources:
+            {{- toYaml .Values.modelDownloader.resources | nindent 12 }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              MODEL_DIR="{{ include "vllm-inference.modelPath" . }}"
+
+              # Skip if model already exists (idempotent)
+              if [ -f "$MODEL_DIR/config.json" ]; then
+                echo "Model already exists at $MODEL_DIR, skipping download."
+                exit 0
+              fi
+
+              echo "Installing huggingface_hub..."
+              pip install --quiet huggingface_hub
+
+              echo "Downloading model: {{ .Values.model.name }} (revision: {{ .Values.model.revision }})"
+              python -c "
+              from huggingface_hub import snapshot_download
+              snapshot_download(
+                  repo_id='{{ .Values.model.name }}',
+                  revision='{{ .Values.model.revision }}',
+                  local_dir='{{ include "vllm-inference.modelPath" . }}',
+                  local_dir_use_symlinks=False
+              )
+              print('Download complete.')
+              "
+
+              echo "Model downloaded successfully to $MODEL_DIR"
+              ls -la "$MODEL_DIR"
+          volumeMounts:
+            - name: model-weights
+              mountPath: /models
+      volumes:
+        - name: model-weights
+          persistentVolumeClaim:
+            claimName: {{ include "vllm-inference.pvcName" . }}
+{{- end }}
