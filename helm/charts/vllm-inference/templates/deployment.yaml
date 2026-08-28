@@ -28,9 +28,6 @@ spec:
         {{- with .Values.commonLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      annotations:
-        # Force pod restart on config change
-        checksum/config: {{ include (print $.Template.BasePath "/deployment.yaml") . | sha256sum | trunc 8 }}
     spec:
       # -- Pod Security Context
       securityContext:
