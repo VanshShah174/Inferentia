@@ -1,0 +1,134 @@
+# =============================================================================
+# Promotion Gate — final verification before production (main)
+# =============================================================================
+# Runs on: PR to main
+# Purpose: This is the release gate. It does NOT build, does NOT scan, does
+#          NOT sign. It only VERIFIES that the artifact being promoted is the
+#          exact same signed image that earned its signature at ppd, and that
+#          ppd has been healthy long enough to trust the promotion.
+#
+#          Human approval is enforced by GitHub branch protection (required
+#          reviewers on main), not by this workflow. This workflow is the
+#          machine half of the gate; the review is the human half.
+#
+# GATING: cosign verify needs the registry + signature to exist. Until the
+#         Terraform/EKS stage wires those, verification is gated behind
+#         vars.REGISTRY_ENABLED and reports what it WOULD verify.
+# =============================================================================
+name: Promotion gate
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: promote-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/vanshshah174/inferentia/vllm-cpu
+  # Sigstore identity constraints — the signature must have been produced by
+  # THIS repo's sign-and-publish workflow via GitHub's OIDC issuer.
+  CERT_IDENTITY_REGEXP: "https://github.com/VanshShah174/Inferentia/.github/workflows/sign-and-publish.yaml@.*"
+  CERT_OIDC_ISSUER: "https://token.actions.githubusercontent.com"
+
+jobs:
+  verify:
+    name: Verify signed artifact & ppd health
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # needed for cosign verify against Sigstore
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # -----------------------------------------------------------------------
+      # Resolve the digest of the artifact under promotion.
+      #
+      # KNOWN LIMITATION (cross-workflow artifacts): same as sign-and-publish —
+      # the `image-digest` artifact is produced by a sibling workflow run and
+      # is not reliably retrievable here. This download is best-effort.
+      #
+      # TODO(registry): once wired, resolve the digest from the registry
+      # (crane digest / buildx imagetools inspect) so promotion verifies the
+      # exact same digest that ppd signed, not a re-derived tag.
+      # -----------------------------------------------------------------------
+      - name: Download image digest artifact (best-effort, same-run only)
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: image-digest
+        continue-on-error: true
+
+      - name: Resolve image reference
+        id: ref
+        run: |
+          # TODO(registry): prefer registry-resolved digest over the SHA tag.
+          if [ -f image-digest.txt ]; then
+            REF="$(cat image-digest.txt)"
+          else
+            REF="${{ env.IMAGE_NAME }}:${{ github.sha }}"
+            echo "::warning::digest artifact not available cross-workflow — using SHA tag. Resolve by digest from the registry once wired (see TODO)."
+          fi
+          echo "image_ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "Promotion target: ${REF}"
+
+      # -----------------------------------------------------------------------
+      # Verify the Cosign signature. This is the core of the gate: it proves
+      # the image was signed by our ppd workflow and has not been swapped.
+      # -----------------------------------------------------------------------
+      - name: Install Cosign
+        if: vars.REGISTRY_ENABLED == 'true'
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Verify Cosign signature
+        if: vars.REGISTRY_ENABLED == 'true'
+        # Keyless verify is stable in Cosign v2.x — no COSIGN_EXPERIMENTAL needed.
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "${CERT_IDENTITY_REGEXP}" \
+            --certificate-oidc-issuer "${CERT_OIDC_ISSUER}" \
+            "${{ steps.ref.outputs.image_ref }}"
+
+      - name: Verify SBOM attestation
+        if: vars.REGISTRY_ENABLED == 'true'
+        run: |
+          cosign verify-attestation --type spdxjson \
+            --certificate-identity-regexp "${CERT_IDENTITY_REGEXP}" \
+            --certificate-oidc-issuer "${CERT_OIDC_ISSUER}" \
+            "${{ steps.ref.outputs.image_ref }}"
+
+      # -----------------------------------------------------------------------
+      # ppd health check — confirm the pre-prod environment has been running
+      # the candidate without regressions before we let it into production.
+      # Gated behind cluster access (added at EKS stage).
+      # -----------------------------------------------------------------------
+      - name: Set up Python
+        if: vars.CLUSTER_ACCESS_ENABLED == 'true'
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.11'
+
+      - name: ppd promotion health check
+        if: vars.CLUSTER_ACCESS_ENABLED == 'true'
+        run: |
+          python ci/scripts/promotion-gate-check.py \
+            --environment ppd \
+            --min-healthy-duration 2h
+
+      - name: Gate summary
+        if: always()
+        run: |
+          echo "Promotion candidate: ${{ steps.ref.outputs.image_ref }}"
+          if [ "${{ vars.REGISTRY_ENABLED }}" != "true" ]; then
+            echo "REGISTRY_ENABLED != true — signature verification skipped (registry not wired yet)."
+          fi
+          if [ "${{ vars.CLUSTER_ACCESS_ENABLED }}" != "true" ]; then
+            echo "CLUSTER_ACCESS_ENABLED != true — ppd health check skipped (no cluster yet)."
+          fi
+          echo "Human approval is enforced by branch protection on main."

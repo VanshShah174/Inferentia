@@ -1,0 +1,179 @@
+# =============================================================================
+# Build & Scan — build the image ONCE, scan it, push it unsigned
+# =============================================================================
+# Runs on: PR to qa, ppd (NOT dev — dev iterates on lint feedback alone)
+# Purpose: Produce the single immutable artifact that flows to production.
+#          Scan it for CVEs (Trivy), scan IaC (Checkov), generate an SBOM
+#          (Syft), then push UNSIGNED to the registry and record the digest.
+#
+# Golden rule: the image is built here and NEVER rebuilt downstream.
+#              sign-and-publish.yaml pulls THIS digest and signs it.
+#              promotion-gate.yaml verifies THIS digest.
+#              What we scan == what we sign == what we deploy.
+#
+# NOTE: registry push + AWS/GHCR auth are wired but gated behind a repo
+#       variable (vars.REGISTRY_ENABLED). Until secrets/registry exist
+#       (added with Terraform/EKS stage), build+scan run and the push
+#       is skipped, so the workflow is green locally-verifiable.
+# =============================================================================
+name: Build & scan
+
+on:
+  pull_request:
+    branches: [qa, ppd]
+    paths:
+      - 'containers/**'
+      - 'helm/**'
+      - 'terraform/**'
+      - 'services/**'
+      - 'policies/**'
+      - '.github/workflows/build-and-scan.yaml'
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Registry placeholder — swapped for ECR at the Terraform/EKS stage.
+  IMAGE_NAME: ghcr.io/vanshshah174/inferentia/vllm-cpu
+
+jobs:
+  build-and-scan:
+    name: Build image & security scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push unsigned image to GHCR (when enabled)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
+      # -----------------------------------------------------------------------
+      # Build once. Load into the local docker daemon so we can scan it
+      # before deciding to push. Tag with the commit SHA (immutable per commit).
+      # -----------------------------------------------------------------------
+      - name: Build image (load locally for scanning)
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
+        with:
+          context: containers/vllm-cpu
+          file: containers/vllm-cpu/Dockerfile
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          load: true
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # -----------------------------------------------------------------------
+      # Trivy — CVE scan of the built image. Fails on CRITICAL/HIGH.
+      # -----------------------------------------------------------------------
+      - name: Trivy image scan (CRITICAL, HIGH)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      # Also emit SARIF so findings show in the GitHub Security tab.
+      - name: Trivy image scan (SARIF report)
+        if: always()
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: sarif
+          output: trivy-image.sarif
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+      # -----------------------------------------------------------------------
+      # Checkov — IaC scan (Terraform, Helm, K8s manifests). Soft-fail until
+      # Terraform exists; flip soft_fail to false once terraform/ is populated.
+      # -----------------------------------------------------------------------
+      - name: Checkov IaC scan
+        uses: bridgecrewio/checkov-action@38a95e98d734de90b74687a0fc94cff0dcbc2b0d # v12.2937.0
+        with:
+          directory: .
+          quiet: true
+          soft_fail: true
+          framework: terraform,helm,kubernetes,dockerfile
+          output_format: cli,sarif
+          output_file_path: console,checkov.sarif
+
+      # -----------------------------------------------------------------------
+      # Syft — generate an SBOM (SPDX JSON) for the exact image we built.
+      # -----------------------------------------------------------------------
+      - name: Generate SBOM (Syft)
+        uses: anchore/sbom-action@df80a981bc6edbc4e220a492d3cbe9f5547a6e75 # v0.17.9
+        with:
+          image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+
+      # -----------------------------------------------------------------------
+      # Push UNSIGNED image to the registry (only when registry is enabled).
+      # Signing happens later at ppd. This just stores the tested artifact.
+      # -----------------------------------------------------------------------
+      - name: Log in to GHCR
+        if: vars.REGISTRY_ENABLED == 'true'
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push unsigned image
+        if: vars.REGISTRY_ENABLED == 'true'
+        run: docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      # -----------------------------------------------------------------------
+      # Record the image digest so downstream workflows pull by DIGEST, not
+      # by tag. A tag can be overwritten; a digest cannot. This is what makes
+      # "build once, promote unchanged" actually enforceable.
+      # -----------------------------------------------------------------------
+      - name: Resolve & record image digest
+        id: digest
+        run: |
+          if [ "${{ vars.REGISTRY_ENABLED }}" = "true" ]; then
+            DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' \
+              ${{ env.IMAGE_NAME }}:${{ github.sha }})
+          else
+            # Registry not wired yet — record the local image ID as a stand-in
+            # so the artifact contract exists and downstream wiring is testable.
+            DIGEST="${{ env.IMAGE_NAME }}:${{ github.sha }} (local-only, registry disabled)"
+          fi
+          echo "Recorded digest: ${DIGEST}"
+          printf '%s\n' "${DIGEST}" > image-digest.txt
+
+      - name: Upload image digest artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: image-digest
+          path: image-digest.txt
+          retention-days: 30
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 30
+
+      - name: Upload scan reports (SARIF)
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: scan-reports
+          path: |
+            trivy-image.sarif
+            checkov.sarif
+          retention-days: 30
+          if-no-files-found: warn

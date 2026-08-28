@@ -1,0 +1,186 @@
+# =============================================================================
+# Sign & Publish — the trust gate
+# =============================================================================
+# Runs on: PR to ppd only
+# Purpose: Take the EXACT image that build-and-scan produced and tested,
+#          sign it (Cosign keyless via Sigstore OIDC), and record an AI
+#          triage of all scan findings as a PR comment.
+#
+# CRITICAL: this workflow NEVER runs `docker build`. Rebuilding would drift
+#           base layers / apt / pip deps and produce a different image than qa
+#           tested. We pull the recorded digest and sign THAT. This is what
+#           makes "build once, promote unchanged" real.
+#
+# GATING: signing + push need a registry + OIDC trust. Until the Terraform/EKS
+#         stage wires those, the heavy steps are gated behind
+#         vars.REGISTRY_ENABLED == 'true'. The triage step runs whenever
+#         secrets.ANTHROPIC_API_KEY is present; otherwise it is skipped.
+# =============================================================================
+name: Sign & publish
+
+on:
+  pull_request:
+    branches: [ppd]
+    paths:
+      - 'containers/**'
+      - 'helm/**'
+      - 'terraform/**'
+      - 'services/**'
+      - 'policies/**'
+      - '.github/workflows/sign-and-publish.yaml'
+
+concurrency:
+  group: sign-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/vanshshah174/inferentia/vllm-cpu
+
+jobs:
+  sign:
+    name: Sign tested image & AI triage
+    runs-on: ubuntu-latest
+    # Job-level so the triage step's `if:` expression can actually read it.
+    # (Step-level env is NOT in scope when GitHub evaluates `if:`.)
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    permissions:
+      contents: read
+      packages: write # push the signature to the registry
+      id-token: write # Sigstore keyless OIDC
+      pull-requests: write # post the triage comment
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # -----------------------------------------------------------------------
+      # KNOWN LIMITATION (cross-workflow artifacts):
+      # build-and-scan.yaml and this workflow are SEPARATE workflows triggered
+      # by the same PR event — they are sibling runs, not parent/child. So
+      # actions/download-artifact CANNOT see build-and-scan's `image-digest`
+      # artifact by run-id here (that only works within one workflow run, or
+      # via a workflow_run trigger). This step is therefore best-effort and
+      # will normally miss, falling through to registry resolution below.
+      #
+      # TODO(registry): once the registry is wired (Terraform/EKS stage), the
+      # digest becomes the registry's source of truth. Resolve it directly with
+      #   crane digest / docker buildx imagetools inspect
+      # instead of relying on a cross-workflow artifact. Remove this download
+      # step at that point.
+      # -----------------------------------------------------------------------
+      - name: Download image digest artifact (best-effort, same-run only)
+        id: getdigest
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: image-digest
+        continue-on-error: true
+
+      - name: Resolve image reference
+        id: ref
+        run: |
+          # Preferred (future): resolve digest from the registry once wired.
+          # TODO(registry): replace the fallback below with e.g.
+          #   REF="${{ env.IMAGE_NAME }}@$(crane digest ${{ env.IMAGE_NAME }}:${{ github.sha }})"
+          if [ -f image-digest.txt ]; then
+            REF="$(cat image-digest.txt)"
+          else
+            REF="${{ env.IMAGE_NAME }}:${{ github.sha }}"
+            echo "::warning::digest artifact not available cross-workflow — using SHA tag. Resolve by digest from the registry once wired (see TODO)."
+          fi
+          echo "image_ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "Signing target: ${REF}"
+
+      # -----------------------------------------------------------------------
+      # Cosign keyless signing — only when the registry is wired.
+      # -----------------------------------------------------------------------
+      - name: Install Cosign
+        if: vars.REGISTRY_ENABLED == 'true'
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Log in to GHCR
+        if: vars.REGISTRY_ENABLED == 'true'
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull tested image (by digest — never rebuild)
+        if: vars.REGISTRY_ENABLED == 'true'
+        run: docker pull "${{ steps.ref.outputs.image_ref }}"
+
+      - name: Cosign sign (keyless)
+        if: vars.REGISTRY_ENABLED == 'true'
+        # Keyless signing is stable in Cosign v2.x — no COSIGN_EXPERIMENTAL needed.
+        run: cosign sign --yes "${{ steps.ref.outputs.image_ref }}"
+
+      # Attach the SBOM produced at build-and-scan as a signed attestation.
+      - name: Download SBOM artifact
+        if: vars.REGISTRY_ENABLED == 'true'
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: sbom
+        continue-on-error: true
+
+      - name: Cosign attest SBOM
+        if: vars.REGISTRY_ENABLED == 'true' && hashFiles('sbom.spdx.json') != ''
+        run: |
+          cosign attest --yes --type spdxjson \
+            --predicate sbom.spdx.json \
+            "${{ steps.ref.outputs.image_ref }}"
+
+      # -----------------------------------------------------------------------
+      # AI triage — summarize scan findings into human-readable risk notes.
+      # Runs only when the API key secret is configured.
+      # -----------------------------------------------------------------------
+      - name: Download scan reports
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: scan-reports
+        continue-on-error: true
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.11'
+
+      - name: Claude triage of scan findings
+        id: triage
+        # ANTHROPIC_API_KEY is inherited from job-level env, so this `if:` is
+        # now actually evaluable (was always-empty when env was step-level).
+        if: env.ANTHROPIC_API_KEY != ''
+        run: |
+          python -m pip install --quiet anthropic
+          python ci/scripts/triage-scans.py \
+            --trivy trivy-image.sarif \
+            --checkov checkov.sarif \
+            --output triage-summary.md
+
+      - name: Post triage summary as PR comment
+        if: hashFiles('triage-summary.md') != ''
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('triage-summary.md', 'utf8');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+
+      - name: Signing summary
+        if: always()
+        run: |
+          if [ "${{ vars.REGISTRY_ENABLED }}" = "true" ]; then
+            echo "Signed: ${{ steps.ref.outputs.image_ref }}"
+          else
+            echo "REGISTRY_ENABLED != true — signing skipped (registry not wired yet)."
+            echo "Target that WOULD be signed: ${{ steps.ref.outputs.image_ref }}"
+          fi
