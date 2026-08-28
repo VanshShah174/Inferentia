@@ -16,6 +16,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
 spec:
   replicas: {{ .Values.serving.replicas }}
   selector:
@@ -25,12 +26,10 @@ spec:
     metadata:
       labels:
         {{- include "vllm-inference.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: inference
         {{- with .Values.commonLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      annotations:
-        # Force pod restart on config change
-        checksum/config: {{ include (print $.Template.BasePath "/deployment.yaml") . | sha256sum | trunc 8 }}
     spec:
       # -- Pod Security Context
       securityContext:

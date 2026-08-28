@@ -96,6 +96,16 @@ Chart.lock
 cosign.key
 
 # ============================
+# Archives (avoid committing accidental bundles like .github.zip)
+# ============================
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# ============================
 # OS
 # ============================
 .DS_Store

@@ -28,6 +28,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: write # gitleaks-action posts findings/summary on the PR
 
 jobs:
   lint:
@@ -45,6 +46,8 @@ jobs:
       - name: Gitleaks (secret scan)
         uses: gitleaks/gitleaks-action@83373cf2f8c4db6e24b41c1a9b086bb9619e9cd3 # v2.3.7
         env:
+          # Required by gitleaks-action to scan pull_request events.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
           GITLEAKS_ENABLE_SUMMARY: "true"
 

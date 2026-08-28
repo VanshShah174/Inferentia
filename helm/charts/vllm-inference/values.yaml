@@ -133,6 +133,9 @@ tolerations: []
 affinity: {}
 
 # -- Labels applied to all resources
+# NOTE: app.kubernetes.io/component is intentionally NOT here — it is
+# per-resource (inference vs. model-downloader), so each template sets its
+# own. Putting it in commonLabels caused a duplicate-key collision in the
+# model-download Job.
 commonLabels:
   app.kubernetes.io/part-of: inferentia
-  app.kubernetes.io/component: inference
