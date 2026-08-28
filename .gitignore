@@ -70,6 +70,9 @@ Thumbs.db
 *.key
 *secret*
 !*secret*.yaml.example
+# detect-secrets baseline is a manifest of REVIEWED findings, not a secret.
+# It must be committed so CI and the pre-commit hook can diff against it.
+!.secrets.baseline
 credentials.json
 token.json
 
