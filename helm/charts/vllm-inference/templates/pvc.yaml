@@ -13,6 +13,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
 spec:
   accessModes:
     - {{ .Values.persistence.accessMode }}

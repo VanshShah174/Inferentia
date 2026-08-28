@@ -12,6 +12,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
 spec:
   type: {{ .Values.service.type }}
   ports:
