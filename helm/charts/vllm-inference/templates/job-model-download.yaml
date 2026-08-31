@@ -39,11 +39,17 @@ spec:
           image: "{{ .Values.modelDownloader.image.repository }}:{{ .Values.modelDownloader.image.tag }}"
           resources:
             {{- toYaml .Values.modelDownloader.resources | nindent 12 }}
+          env:
+            # The container runs as non-root (uid 1000) with no writable HOME.
+            # pip --user needs a writable HOME for its user-site; without this
+            # the install fails and (previously, with --quiet) failed silently.
+            - name: HOME
+              value: /tmp
           command:
             - /bin/sh
             - -c
             - |
-              set -e
+              set -eu
               MODEL_DIR="{{ include "vllm-inference.modelPath" . }}"
 
               # Skip if model already exists (idempotent)
@@ -52,8 +58,10 @@ spec:
                 exit 0
               fi
 
-              echo "Installing huggingface_hub..."
-              pip install --quiet huggingface_hub
+              echo "Installing huggingface_hub (user site)..."
+              # --user installs into $HOME/.local (writable). No --quiet, so any
+              # failure surfaces in logs instead of silently continuing.
+              pip install --user --no-cache-dir --disable-pip-version-check huggingface_hub
 
               echo "Downloading model: {{ .Values.model.name }} (revision: {{ .Values.model.revision }})"
               python -c "

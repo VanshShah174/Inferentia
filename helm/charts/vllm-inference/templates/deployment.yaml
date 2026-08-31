@@ -90,7 +90,13 @@ spec:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
 
           # -- vLLM serve arguments
+          # IMPORTANT: pass the LOCAL model path (where the download Job wrote
+          # the weights on the PVC), NOT the HuggingFace repo id. Passing the
+          # repo id makes vLLM try to resolve config from HF at startup (and
+          # write to HF_HOME), which fails offline / on a read-only cache.
           args:
+            - "{{ include "vllm-inference.modelPath" . }}"
+            - "--served-model-name"
             - "{{ .Values.model.name }}"
             - "--dtype"
             - "{{ .Values.serving.dtype }}"
@@ -101,9 +107,8 @@ spec:
             {{- end }}
             - "--port"
             - "{{ .Values.serving.port }}"
-            {{- if .Values.persistence.enabled }}
-            - "--download-dir"
-            - "/models"
+            {{- range .Values.serving.extraArgs }}
+            - {{ . | quote }}
             {{- end }}
 
           # -- Environment variables
@@ -112,8 +117,25 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
+            # Load strictly from the local path; never reach out to the HF Hub.
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            # The pod runs as non-root (uid 1000) with no writable home. Many
+            # libraries default their caches to /.<tool> (root-owned, NOT
+            # writable) and crash: HF -> /.cache, Triton -> /.triton, vLLM ->
+            # /.cache/vllm. Point HOME and each cache at writable /tmp paths.
+            - name: HOME
+              value: "/tmp"
             - name: HF_HOME
-              value: "/home/vllm/.cache/huggingface"
+              value: "/tmp/hf-cache"
+            - name: XDG_CACHE_HOME
+              value: "/tmp/.cache"
+            - name: TRITON_CACHE_DIR
+              value: "/tmp/.triton"
+            - name: VLLM_CACHE_ROOT
+              value: "/tmp/.cache/vllm"
 
           # -- Ports
           ports:
