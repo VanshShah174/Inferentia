@@ -9,6 +9,16 @@
 # -- Namespace
 namespace: inference
 
+# -- ServiceAccount
+# The model-download pod runs as THIS ServiceAccount. On EKS a Pod Identity
+# association (in Terraform) maps (cluster, namespace, this SA) -> the S3-read
+# IAM role, so `aws s3 sync` gets credentials with NO static keys and NO IRSA
+# role-arn annotation. If the pod ran as the `default` SA it would have no
+# association and S3 access would fail with "Unable to locate credentials".
+serviceAccount:
+  create: true
+  name: "vllm-model-loader"
+
 # -- Model Configuration
 model:
   name: "Qwen/Qwen2.5-0.5B-Instruct"

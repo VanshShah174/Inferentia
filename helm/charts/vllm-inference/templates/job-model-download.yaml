@@ -28,6 +28,9 @@ spec:
         {{- include "vllm-inference.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: model-downloader
     spec:
+      # Run as the Pod-Identity-bound SA so `aws s3 sync` gets S3 creds.
+      # (default SA has no association -> "Unable to locate credentials".)
+      serviceAccountName: {{ .Values.serviceAccount.name }}
       restartPolicy: OnFailure
       securityContext:
         runAsNonRoot: true
@@ -58,6 +61,18 @@ spec:
                 exit 0
               fi
 
+              {{- if eq .Values.model.source "s3" }}
+              # ---- S3 source (EKS) --------------------------------------------
+              # Credentials come from EKS Pod Identity via the ServiceAccount
+              # (serviceAccountName above) -> NO static keys. awscli auto-detects
+              # them from the Pod Identity endpoint.
+              echo "Installing awscli (user site)..."
+              pip install --user --no-cache-dir --disable-pip-version-check awscli
+
+              echo "Syncing model from s3://{{ .Values.model.s3Bucket }}/{{ .Values.model.s3Key }} ..."
+              aws s3 sync "s3://{{ .Values.model.s3Bucket }}/{{ .Values.model.s3Key }}" "$MODEL_DIR"
+              {{- else }}
+              # ---- HuggingFace source (local/kind default) --------------------
               echo "Installing huggingface_hub (user site)..."
               # --user installs into $HOME/.local (writable). No --quiet, so any
               # failure surfaces in logs instead of silently continuing.
@@ -74,8 +89,9 @@ spec:
               )
               print('Download complete.')
               "
+              {{- end }}
 
-              echo "Model downloaded successfully to $MODEL_DIR"
+              echo "Model ready at $MODEL_DIR"
               ls -la "$MODEL_DIR"
           volumeMounts:
             - name: model-weights
