@@ -1,0 +1,76 @@
+# =============================================================================
+# ArgoCD ApplicationSet — vLLM inference, one app per environment
+# =============================================================================
+# Defines the delivery pattern ONCE; the list generator produces four
+# Applications (dev/qa/ppd/prod). This is the DRY equivalent of the per-concern
+# CI: define the concern once, vary by context — here the context is the
+# environment (branch + namespace + values file).
+#
+# Branch-tracking model (matches the 4-branch promotion flow):
+#   dev  app  -> targetRevision dev,  namespace inference-dev,  values.yaml
+#   qa   app  -> targetRevision qa,   namespace inference-qa,   values-qa.yaml
+#   ppd  app  -> targetRevision ppd,  namespace inference-ppd,  values-ppd.yaml
+#   prod app  -> targetRevision main, namespace inference-prod, values-prod.yaml
+#
+# So merging a PR into `qa` makes ArgoCD sync the qa Application — the branch
+# advance IS the deployment trigger. Same image, same chart, per-env values.
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: vllm-inference
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    - list:
+        elements:
+          - env: dev
+            branch: dev
+            valuesFile: values.yaml
+          - env: qa
+            branch: qa
+            valuesFile: values-qa.yaml
+          - env: ppd
+            branch: ppd
+            valuesFile: values-ppd.yaml
+          - env: prod
+            branch: main
+            valuesFile: values-prod.yaml
+
+  template:
+    metadata:
+      name: 'vllm-{{.env}}'
+      labels:
+        app.kubernetes.io/part-of: inferentia
+        inferentia.io/environment: '{{.env}}'
+    spec:
+      project: default
+
+      source:
+        repoURL: https://github.com/VanshShah174/Inferentia
+        targetRevision: '{{.branch}}' # env tracks its branch
+        path: helm/charts/vllm-inference
+        helm:
+          valueFiles:
+            - '{{.valuesFile}}'
+
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'inference-{{.env}}'
+
+      syncPolicy:
+        automated:
+          prune: true # remove resources deleted from git
+          selfHeal: true # revert manual drift back to git state
+        syncOptions:
+          - CreateNamespace=false # namespaces come from manifests/bootstrap
+          - ServerSideApply=true
+        retry:
+          limit: 3
+          backoff:
+            duration: 30s
+            factor: 2
+            maxDuration: 5m
