@@ -1,0 +1,88 @@
+# =============================================================================
+# vllm-inference — PPD (Pre-Production) Values Override
+# =============================================================================
+# Applied via ArgoCD ApplicationSet (ppd app, tracks the `ppd` branch) or:
+#   helm install -f values.yaml -f values-ppd.yaml
+#
+# PPD is the prod rehearsal: it should mirror prod as closely as possible so
+# promotion to main carries no surprises. Autoscaling ON, prod-like resources,
+# S3 source, ECR image. The main difference from prod is a slightly lower max
+# replica ceiling to bound cost.
+# =============================================================================
+
+# -- Namespace
+namespace: inference-ppd
+
+# -- Container Image (from ECR, signed by CI). Region ca-central-1.
+image:
+  repository: <AWS_ACCOUNT_ID>.dkr.ecr.ca-central-1.amazonaws.com/inferentia/vllm-cpu
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# -- Model Configuration (S3 source — same artifact promoted from qa)
+model:
+  name: "Qwen/Qwen2.5-0.5B-Instruct"
+  revision: "main"
+  source: "s3"
+  s3Bucket: "inferentia-model-store-<AWS_ACCOUNT_ID>"
+  s3Key: "Qwen2.5-0.5B-Instruct/"
+
+# -- vLLM Serving (prod-like)
+serving:
+  replicas: 2
+  dtype: "bfloat16"
+  maxModelLen: 2048
+  enforceEager: true
+  port: 8000
+  env:
+    VLLM_CPU_KVCACHE_SPACE: "4"
+    VLLM_TARGET_DEVICE: "cpu"
+    TOKENIZERS_PARALLELISM: "false"
+
+# -- Resources (prod-sized)
+resources:
+  requests:
+    cpu: "4"
+    memory: "8Gi"
+  limits:
+    cpu: "8"
+    memory: "16Gi"
+
+# -- Persistent Volume
+persistence:
+  enabled: true
+  storageClass: "gp3"
+  size: 10Gi
+  accessMode: ReadWriteOnce
+
+shmSize: 2Gi
+
+# -- Autoscaling ON (rehearse prod scaling), lower ceiling than prod for cost
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetKVCacheUtilization: 70
+
+# -- Node placement (mirror prod)
+nodeSelector:
+  node-role: inference
+
+tolerations:
+  - key: "workload"
+    operator: "Equal"
+    value: "inference"
+    effect: "NoSchedule"
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - vllm-inference
+          topologyKey: topology.kubernetes.io/zone
