@@ -1,0 +1,147 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "schemaVersion": 39,
+  "title": "vLLM Inference — TTFT / TPOT / KV Cache",
+  "tags": ["inferentia", "vllm", "llm"],
+  "timezone": "browser",
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "15s",
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(vllm:num_requests_running, namespace)",
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Time To First Token (TTFT) — p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:time_to_first_token_seconds_bucket{namespace=~\"$namespace\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket{namespace=~\"$namespace\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:time_to_first_token_seconds_bucket{namespace=~\"$namespace\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Time Per Output Token (TPOT) — p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:time_per_output_token_seconds_bucket{namespace=~\"$namespace\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:time_per_output_token_seconds_bucket{namespace=~\"$namespace\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:time_per_output_token_seconds_bucket{namespace=~\"$namespace\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "KV Cache Utilization (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.7 },
+              { "color": "red", "value": 0.9 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg(vllm:kv_cache_usage_perc{namespace=~\"$namespace\"})",
+          "legendFormat": "kv-cache used"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Token Throughput (tokens/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "expr": "sum(rate(vllm:generation_tokens_total{namespace=~\"$namespace\"}[1m]))",
+          "legendFormat": "output tokens/s"
+        },
+        {
+          "expr": "sum(rate(vllm:prompt_tokens_total{namespace=~\"$namespace\"}[1m]))",
+          "legendFormat": "prompt tokens/s"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Requests — Running vs Waiting",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "expr": "sum(vllm:num_requests_running{namespace=~\"$namespace\"})",
+          "legendFormat": "running"
+        },
+        {
+          "expr": "sum(vllm:num_requests_waiting{namespace=~\"$namespace\"})",
+          "legendFormat": "waiting"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Prefix Cache Hit Ratio",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 } },
+      "targets": [
+        {
+          "expr": "sum(rate(vllm:prefix_cache_hits_total{namespace=~\"$namespace\"}[5m])) / clamp_min(sum(rate(vllm:prefix_cache_queries_total{namespace=~\"$namespace\"}[5m])), 1)",
+          "legendFormat": "prefix cache hit ratio"
+        }
+      ]
+    }
+  ]
+}

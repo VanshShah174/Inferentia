@@ -1,0 +1,45 @@
+# =============================================================================
+# KEDA ScaledObject — scale vLLM on KV-cache utilization (the real signal)
+# =============================================================================
+# Replaces the CPU-based HPA stub in the vllm-inference chart. CPU is a poor
+# proxy for LLM load; KV-cache pressure is the metric that actually predicts
+# when a replica is saturated. KEDA queries Prometheus and scales on it.
+#
+# Apply AFTER: KEDA installed (keda namespace) + kube-prometheus-stack running.
+# One ScaledObject per environment namespace where autoscaling is desired
+# (ppd/prod). Shown here for prod; duplicate with the namespace changed, or
+# template it. Scale target = the vLLM Deployment.
+#
+# NOTE: disable the chart's HPA (autoscaling.enabled=false) where KEDA manages
+# scaling, so the two controllers don't fight over the same Deployment.
+# =============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm-inference-kvcache
+  namespace: inference-prod
+  labels:
+    app.kubernetes.io/part-of: inferentia
+    app.kubernetes.io/component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm-vllm-inference # <release>-<chart>; adjust if release name differs
+  minReplicaCount: 2
+  maxReplicaCount: 10
+  cooldownPeriod: 300 # wait 5m of low load before scaling down
+  pollingInterval: 15 # query Prometheus every 15s
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300 # avoid flapping on spiky LLM load
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: "http://kube-prom-stack-prometheus.monitoring.svc.cluster.local:9090"
+        metricName: vllm_kv_cache_usage_perc
+        # kv_cache_usage_perc is 0-1; scale to hold average around 0.70.
+        query: 'avg(vllm:kv_cache_usage_perc{namespace="inference-prod"})'
+        threshold: "0.70"
