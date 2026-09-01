@@ -7,7 +7,7 @@
 # fallback/stub that scales on CPU until KEDA is installed.
 #
 # Production path (Phase 7):
-#   KEDA ScaledObject → queries Prometheus → vllm:kv_cache_usage_percent
+#   KEDA ScaledObject → queries Prometheus → vllm:kv_cache_usage_perc
 #   → scales inference pods based on actual memory pressure
 #
 # This HPA is a simpler alternative that works without KEDA installed.
@@ -35,6 +35,6 @@ spec:
           type: Utilization
           averageUtilization: 80
     # TODO (Phase 7): Replace with KEDA ScaledObject targeting:
-    #   - vllm:kv_cache_usage_percent > {{ .Values.autoscaling.targetKVCacheUtilization }}
+    #   - vllm:kv_cache_usage_perc > {{ .Values.autoscaling.targetKVCacheUtilization }}
     #   - vllm:num_requests_waiting > 5
 {{- end }}
