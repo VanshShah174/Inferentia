@@ -1,0 +1,94 @@
+# =============================================================================
+# Kyverno ClusterPolicy — resource hygiene for inference workloads
+# =============================================================================
+# Operational guardrails that keep the cluster healthy and observable. These
+# guarantee at ADMISSION what a well-behaved chart should already do — so a
+# misconfigured values file or a hand-applied pod can't skip them:
+#
+#   - resource requests + limits  -> no unbounded pod can starve a node; the
+#     scheduler can bin-pack; HPA/KEDA have a baseline to scale against.
+#   - readiness + liveness probes -> Kubernetes can route traffic correctly and
+#     restart wedged pods (matters a lot for slow-starting vLLM).
+#   - standard labels             -> consistent selection, cost allocation, and
+#     ServiceMonitor/dashboard targeting.
+#
+# Scoped to the inference-* namespaces so system/kube namespaces are untouched.
+# =============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: inference-resource-hygiene
+  annotations:
+    policies.kyverno.io/title: Inference Resource Hygiene
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Requires CPU/memory requests and limits, readiness and liveness probes,
+      and standard app.kubernetes.io labels on all pods in the inference
+      namespaces.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    # -------------------------------------------------------------------------
+    - name: require-requests-and-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [inference-dev, inference-qa, inference-ppd, inference-prod]
+      validate:
+        message: "Every container must set CPU/memory requests AND limits."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  requests:
+                    memory: "?*"
+                    cpu: "?*"
+                  limits:
+                    memory: "?*"
+                    cpu: "?*"
+
+    # -------------------------------------------------------------------------
+    - name: require-probes
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [inference-dev, inference-qa, inference-ppd, inference-prod]
+      # The model-download Job pod is short-lived and has no service endpoint,
+      # so probes don't apply to it — exclude the downloader component.
+      exclude:
+        any:
+          - resources:
+              selector:
+                matchLabels:
+                  app.kubernetes.io/component: model-downloader
+      validate:
+        message: "Long-running containers must define readiness and liveness probes."
+        # NOTE: this pattern matches spec.containers[] ONLY — initContainers
+        # (e.g. the vLLM wait-for-model init container) run once and exit, so
+        # they are correctly NOT subject to probe requirements.
+        pattern:
+          spec:
+            containers:
+              - livenessProbe:
+                  "?*": "?*"
+                readinessProbe:
+                  "?*": "?*"
+
+    # -------------------------------------------------------------------------
+    - name: require-standard-labels
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [inference-dev, inference-qa, inference-ppd, inference-prod]
+      validate:
+        message: "Pods must carry app.kubernetes.io/name and app.kubernetes.io/instance labels."
+        pattern:
+          metadata:
+            labels:
+              app.kubernetes.io/name: "?*"
+              app.kubernetes.io/instance: "?*"
