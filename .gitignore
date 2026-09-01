@@ -5,7 +5,9 @@
 *.tfstate.*
 *.tfstate.backup
 .terraform/
-.terraform.lock.hcl
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored — it pins provider
+# versions + hashes for reproducible init across laptop/CI (supply-chain
+# hygiene, like package-lock.json). Commit it.
 crash.log
 crash.*.log
 override.tf
