@@ -6,8 +6,10 @@
 #   Prod: values-prod.yaml
 # =============================================================================
 
-# -- Namespace
-namespace: inference
+# -- Namespace (base = dev; overridden per environment in values-<env>.yaml).
+# MUST match the ApplicationSet destination namespace for this environment,
+# because every template pins resources to .Values.namespace.
+namespace: inference-dev
 
 # -- ServiceAccount
 # The model-download pod runs as THIS ServiceAccount. On EKS a Pod Identity

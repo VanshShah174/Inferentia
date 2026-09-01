@@ -14,19 +14,24 @@
 #   - Node selector for inference nodes
 # =============================================================================
 
+# -- Namespace (every template pins to .Values.namespace; must match the
+# ApplicationSet destination for prod)
+namespace: inference-prod
+
 # -- Container Image (from ECR, signed by CI)
 image:
-  repository: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/inferentia/vllm-cpu
+  repository: <AWS_ACCOUNT_ID>.dkr.ecr.ca-central-1.amazonaws.com/inferentia/vllm-cpu
   tag: "0.1.0"
   pullPolicy: IfNotPresent
 
-# -- Model Configuration
+# -- Model Configuration (SAME bucket + key as qa/ppd — one artifact promoted,
+# matches the Terraform model-store bucket inferentia-model-store-<account_id>)
 model:
   name: "Qwen/Qwen2.5-0.5B-Instruct"
   revision: "main"
   source: "s3"
-  s3Bucket: "inferentia-models-prod"
-  s3Key: "models/Qwen2.5-0.5B-Instruct/"
+  s3Bucket: "inferentia-model-store-<AWS_ACCOUNT_ID>"
+  s3Key: "Qwen2.5-0.5B-Instruct/"
 
 # -- vLLM Serving Configuration (production tuned)
 serving:
