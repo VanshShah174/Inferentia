@@ -15,14 +15,17 @@ metadata:
     {{- include "vllm-inference.labels" . | nindent 4 }}
     app.kubernetes.io/component: inference
   annotations:
-    # Created as a pre-install/pre-upgrade hook so it exists BEFORE the
-    # model-download Job (also a pre-install hook, weight -5) runs. A lower
-    # weight (-10) means Helm creates this PVC first. Without this, the Job
-    # is scheduled before the PVC exists and stays Pending forever.
-    # NOTE: no "hook-succeeded"/"hook-failed" delete policy — the PVC must
-    # persist after hooks complete so the vLLM Deployment can mount it.
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": "-10"
+    # NORMAL resource (NOT a Helm hook). Ordering is enforced by the vLLM
+    # Deployment's `wait-for-model` init container, not by hook weights.
+    #
+    # WHY NOT A HOOK: a hook PVC deadlocks under ArgoCD. ArgoCD applies hooks
+    # sequentially and waits for each to become Healthy before the next. But a
+    # WaitForFirstConsumer PVC (gp3) stays Pending until a POD mounts it — and
+    # that pod (the model-download Job) is a later hook ArgoCD won't create
+    # until the PVC hook "completes". Deadlock. As a normal resource the PVC is
+    # applied in the same wave as the Job, whose pod triggers binding.
+    # ArgoCD sync-wave keeps it ahead of the Job for tidy ordering.
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   accessModes:
     - {{ .Values.persistence.accessMode }}
