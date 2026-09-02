@@ -68,7 +68,14 @@ spec:
               entries:
                 - keyless:
                     # The signing identity MUST be our sign-and-publish workflow.
-                    subject: "https://github.com/VanshShah174/Inferentia/.github/workflows/sign-and-publish.yaml@refs/heads/ppd"
+                    # subjectRegExp (not subject) accepts BOTH branch and PR-merge
+                    # refs because sign-and-publish runs on pull_request events —
+                    # so the Fulcio cert subject is ...@refs/pull/<N>/merge, not
+                    # ...@refs/heads/ppd. The trust assertion that matters is
+                    # WORKFLOW IDENTITY + REPO (who signed), not the ref (when it
+                    # ran). Both refs map to the same sign-and-publish.yaml in this
+                    # repo, signed via GitHub OIDC — so both are trustworthy.
+                    subjectRegExp: "https://github.com/VanshShah174/Inferentia/.github/workflows/sign-and-publish.yaml@refs/(heads/ppd|pull/[0-9]+/merge)"
                     issuer: "https://token.actions.githubusercontent.com"
                     rekor:
                       url: "https://rekor.sigstore.dev"
