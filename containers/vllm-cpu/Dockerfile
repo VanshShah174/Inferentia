@@ -16,6 +16,19 @@ LABEL org.opencontainers.image.source="https://github.com/VanshShah174/Inferenti
 LABEL org.opencontainers.image.version="0.1.0"
 LABEL org.opencontainers.image.vendor="Inferentia"
 
+# -----------------------------------------------------------------------------
+# CVE remediation — upgrade vulnerable build/packaging libs shipped in the base
+# image to their fixed versions. Trivy (build-and-scan) flags these as HIGH:
+#   setuptools     CVE-2025-47273  -> fixed 78.1.1  (path traversal)
+#   wheel          CVE-2026-24049  -> fixed 0.46.2  (priv-esc / arbitrary code)
+#   jaraco.context CVE-2026-23949  -> fixed 6.1.0   (path traversal)
+# Done as root (before the USER switch) so the system site-packages are writable.
+# -----------------------------------------------------------------------------
+RUN pip install --no-cache-dir --upgrade \
+        "setuptools>=78.1.1" \
+        "wheel>=0.46.2" \
+        "jaraco.context>=6.1.0"
+
 # Create non-root user for security (CIS Benchmark 4.1)
 RUN groupadd -r vllm && useradd -r -g vllm -d /home/vllm -s /sbin/nologin vllm \
     && mkdir -p /home/vllm/.cache /models \
