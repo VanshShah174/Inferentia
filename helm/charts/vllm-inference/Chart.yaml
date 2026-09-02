@@ -1,0 +1,18 @@
+apiVersion: v2
+name: vllm-inference
+description: Self-hosted LLM inference engine serving Qwen 2.5 on vLLM (CPU/GPU)
+type: application
+version: 0.1.0
+appVersion: "0.28.0"
+keywords:
+  - llm
+  - inference
+  - vllm
+  - ai
+  - kubernetes
+maintainers:
+  - name: Vansh Shah
+    url: https://github.com/VanshShah174
+sources:
+  - https://github.com/VanshShah174/Inferentia
+home: https://github.com/VanshShah174/Inferentia

@@ -1,0 +1,104 @@
+# =============================================================================
+# vllm-inference — Production Values Override
+# =============================================================================
+# These values override the defaults in values.yaml for production deployment.
+# Applied via: helm install -f values.yaml -f values-prod.yaml
+# Or via ArgoCD ApplicationSet targeting the prod branch.
+#
+# Key differences from dev:
+#   - More replicas
+#   - Larger model context window
+#   - Autoscaling enabled
+#   - Higher resource limits
+#   - ECR image (not local)
+#   - Node selector for inference nodes
+# =============================================================================
+
+# -- Namespace (every template pins to .Values.namespace; must match the
+# ApplicationSet destination for prod)
+namespace: inference-prod
+
+# -- Container Image (from ECR, signed by CI). repository INJECTED by the
+# ArgoCD ApplicationSet (helm.parameters) — empty here, chart stays generic.
+image:
+  repository: ""
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# -- Model Configuration (SAME bucket + key as qa/ppd — one artifact promoted).
+# s3Bucket INJECTED by the ApplicationSet (helm.parameters model.s3Bucket).
+model:
+  name: "Qwen/Qwen2.5-0.5B-Instruct"
+  revision: "main"
+  source: "s3"
+  s3Bucket: ""
+  s3Key: "Qwen2.5-0.5B-Instruct/"
+
+# -- vLLM Serving Configuration (production tuned)
+serving:
+  replicas: 2
+  dtype: "bfloat16"
+  maxModelLen: 2048
+  enforceEager: true
+  port: 8000
+  env:
+    VLLM_CPU_KVCACHE_SPACE: "4"
+    VLLM_TARGET_DEVICE: "cpu"
+    TOKENIZERS_PARALLELISM: "false"
+
+# -- Resource Requests and Limits (production sized nodes)
+resources:
+  requests:
+    cpu: "4"
+    memory: "8Gi"
+  limits:
+    cpu: "8"
+    memory: "16Gi"
+
+# -- Persistent Volume (larger for production models)
+persistence:
+  enabled: true
+  storageClass: "gp3"
+  size: 10Gi
+  accessMode: ReadWriteOnce
+
+# -- Shared Memory
+shmSize: 2Gi
+
+# -- Autoscaling (enabled in production)
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetKVCacheUtilization: 70
+
+# -- Node Selector (target inference node group)
+nodeSelector:
+  node-role: inference
+
+# -- Tolerations (inference nodes may have taints)
+tolerations:
+  - key: "workload"
+    operator: "Equal"
+    value: "inference"
+    effect: "NoSchedule"
+
+# -- Affinity (spread pods across AZs)
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - vllm-inference
+          topologyKey: topology.kubernetes.io/zone
+
+# -- NetworkPolicy: INHERITED from values.yaml (enabled: true, same gateway /
+# prometheus / dns / egress selectors as every EKS env). Not repeated here
+# because prod uses the shared segmentation baseline unchanged. Override here
+# ONLY if prod ever needs a stricter posture than the other envs. Local kind
+# disables it in values-kind.yaml.

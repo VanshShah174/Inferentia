@@ -1,0 +1,118 @@
+{{- if and .Values.persistence.enabled .Values.modelDownloader.enabled }}
+# =============================================================================
+# Job — Model Download (One-Time)
+# =============================================================================
+# Downloads model weights from HuggingFace (or S3) to the PVC.
+# Runs once. vLLM pods wait (via init container) until this completes.
+# On re-runs: uses helm.sh/hook to avoid re-creating if model exists.
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vllm-inference.fullname" . }}-model-download
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-downloader
+  annotations:
+    # NORMAL resource (NOT a Helm hook). SAME sync-wave as the PVC (0) so the
+    # Job's pod is created alongside the PVC and becomes its first consumer,
+    # triggering WaitForFirstConsumer binding. It must NOT be in a LATER wave
+    # than the PVC/Deployment: ArgoCD waits for a wave to be Healthy before the
+    # next, and the PVC (Pending) + Deployment (waiting on the model) never go
+    # Healthy until this Job runs — a later-wave Job would deadlock. The
+    # Deployment's `wait-for-model` init container enforces model-ready ordering.
+    #
+    # WHY NOT A HOOK: as a pre-install/PreSync hook it ran before the PVC (now a
+    # normal resource) existed under ArgoCD, and hook PVCs deadlock (see pvc.yaml).
+    argocd.argoproj.io/sync-wave: "0"
+    # Let ArgoCD replace the immutable Job on re-sync instead of erroring on
+    # spec changes (Jobs are largely immutable once created).
+    argocd.argoproj.io/sync-options: Replace=true
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "vllm-inference.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: model-downloader
+    spec:
+      # Run as the Pod-Identity-bound SA so `aws s3 sync` gets S3 creds.
+      # (default SA has no association -> "Unable to locate credentials".)
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: model-downloader
+          image: "{{ .Values.modelDownloader.image.repository }}:{{ .Values.modelDownloader.image.tag }}"
+          resources:
+            {{- toYaml .Values.modelDownloader.resources | nindent 12 }}
+          env:
+            # The container runs as non-root (uid 1000) with no writable HOME.
+            # pip --user needs a writable HOME for its user-site; without this
+            # the install fails and (previously, with --quiet) failed silently.
+            - name: HOME
+              value: /tmp
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              MODEL_DIR="{{ include "vllm-inference.modelPath" . }}"
+
+              # Skip if model already exists (idempotent)
+              if [ -f "$MODEL_DIR/config.json" ]; then
+                echo "Model already exists at $MODEL_DIR, skipping download."
+                exit 0
+              fi
+
+              {{- if eq .Values.model.source "s3" }}
+              # ---- S3 source (EKS) --------------------------------------------
+              # Credentials come from EKS Pod Identity via the ServiceAccount
+              # (serviceAccountName above) -> NO static keys. awscli auto-detects
+              # them from the Pod Identity endpoint.
+              echo "Installing awscli (user site)..."
+              pip install --user --no-cache-dir --disable-pip-version-check awscli
+
+              # pip --user installs the `aws` entrypoint into $HOME/.local/bin
+              # ($HOME=/tmp here), which is NOT on PATH -> "aws: not found".
+              # Put it on PATH before use.
+              export PATH="$HOME/.local/bin:$PATH"
+
+              echo "Syncing model from s3://{{ .Values.model.s3Bucket }}/{{ .Values.model.s3Key }} ..."
+              aws s3 sync "s3://{{ .Values.model.s3Bucket }}/{{ .Values.model.s3Key }}" "$MODEL_DIR"
+              {{- else }}
+              # ---- HuggingFace source (local/kind default) --------------------
+              echo "Installing huggingface_hub (user site)..."
+              # --user installs into $HOME/.local (writable). No --quiet, so any
+              # failure surfaces in logs instead of silently continuing.
+              pip install --user --no-cache-dir --disable-pip-version-check huggingface_hub
+
+              echo "Downloading model: {{ .Values.model.name }} (revision: {{ .Values.model.revision }})"
+              python -c "
+              from huggingface_hub import snapshot_download
+              snapshot_download(
+                  repo_id='{{ .Values.model.name }}',
+                  revision='{{ .Values.model.revision }}',
+                  local_dir='{{ include "vllm-inference.modelPath" . }}',
+                  local_dir_use_symlinks=False
+              )
+              print('Download complete.')
+              "
+              {{- end }}
+
+              echo "Model ready at $MODEL_DIR"
+              ls -la "$MODEL_DIR"
+          volumeMounts:
+            - name: model-weights
+              mountPath: /models
+      volumes:
+        - name: model-weights
+          persistentVolumeClaim:
+            claimName: {{ include "vllm-inference.pvcName" . }}
+{{- end }}

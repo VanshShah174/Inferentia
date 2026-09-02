@@ -1,0 +1,164 @@
+{{- if .Values.networkPolicy.enabled }}
+# =============================================================================
+# NetworkPolicy — Namespace Segmentation for vLLM Inference
+# =============================================================================
+# Defense-in-depth network layer. Kyverno governs ADMISSION (is this pod
+# allowed to exist?); these policies govern TRAFFIC (which pods may talk to
+# which, on which ports). Without them, ANY pod in the cluster can reach the
+# vLLM API on :8000 — this closes that hole with a default-deny baseline plus
+# explicit allow-lists.
+#
+# ENFORCEMENT NOTE: NetworkPolicy is only enforced if the CNI supports it. On
+# EKS the VPC CNI's network-policy feature must be enabled (done in the eks
+# Terraform module via the vpc-cni addon `enableNetworkPolicy=true`). On kind
+# the default kindnet CNI does NOT enforce these — hence networkPolicy.enabled
+# is false in values-kind.yaml (the policies would be inert noise locally).
+#
+# Three policies, layered:
+#   1. default-deny-ingress  — deny ALL ingress to every pod in the namespace
+#   2. allow-vllm-ingress    — re-open :8000 ONLY from Gateway/EPP + Prometheus
+#   3. allow-egress          — DNS (always) + HTTPS 443 (S3/ECR/HF model pull)
+# Egress is otherwise unrestricted-by-default in K8s; policy #3 exists so that
+# once ANY egress policy selects a pod, we still explicitly permit the flows
+# the workload genuinely needs (deny-by-omission would break DNS + model pull).
+# =============================================================================
+---
+# 1) DEFAULT-DENY INGRESS ------------------------------------------------------
+# Selects every pod in the namespace (empty podSelector) and, by declaring the
+# Ingress policyType with no rules, denies all inbound traffic. Egress is left
+# untouched here so it stays default-allow until policy #3 scopes it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vllm-inference.fullname" . }}-default-deny-ingress
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# 2) ALLOW INGRESS TO vLLM :8000 ----------------------------------------------
+# Re-opens the serving port ONLY to the traffic sources that legitimately need
+# it. Targets vLLM pods specifically (component: inference), NOT the one-shot
+# model-download Job pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vllm-inference.fullname" . }}-allow-vllm-ingress
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vllm-inference.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: inference
+  policyTypes:
+    - Ingress
+  ingress:
+    # --- Gateway API / llm-d EPP -> vLLM :8000 (serving traffic) -------------
+    # Match the router namespace by label AND (optionally) a pod label, so a
+    # compromised pod in some other namespace cannot reach vLLM even if it
+    # lands in a namespace we trust. Both selectors on one `from` element are
+    # AND-ed (namespace AND pod).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.gateway.namespaceSelector | nindent 14 }}
+          {{- with .Values.networkPolicy.gateway.podSelector }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - port: {{ .Values.serving.port }}
+          protocol: TCP
+    {{- if .Values.networkPolicy.allowSameNamespace }}
+    # --- Same-namespace clients -> vLLM :8000 --------------------------------
+    # In-namespace callers (e.g. an in-cluster test pod, or a co-located EPP)
+    # may reach the serving port. Kept behind a toggle so it can be tightened.
+    - from:
+        - podSelector: {}
+      ports:
+        - port: {{ .Values.serving.port }}
+          protocol: TCP
+    {{- end }}
+    # --- Prometheus -> vLLM :8000 /metrics (observability) -------------------
+    # The ServiceMonitor scrapes /metrics on the SAME port as the API. Allow
+    # ingress from the monitoring namespace so scraping is not silently dropped
+    # by the default-deny above (a classic "metrics went blank" NetworkPolicy
+    # footgun).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.prometheus.namespaceSelector | nindent 14 }}
+      ports:
+        - port: {{ .Values.serving.port }}
+          protocol: TCP
+---
+# 3) ALLOW EGRESS (DNS + HTTPS) -----------------------------------------------
+# Applies to ALL app pods in the namespace (vLLM + the model-download Job,
+# which share the selector labels). Once this policy selects a pod, egress
+# becomes deny-by-default for it, so we must explicitly permit:
+#   - DNS (UDP/TCP 53) to kube-dns — without it, every hostname lookup fails
+#   - HTTPS 443 — S3 (model sync via Pod Identity), ECR (image pull is on the
+#     kubelet, but keep 443 open for any in-pod AWS SDK/registry calls), and
+#     HuggingFace (kind/local fallback source)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vllm-inference.fullname" . }}-allow-egress
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vllm-inference.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    # --- DNS resolution (kube-dns / CoreDNS) ---------------------------------
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 14 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # --- HTTPS egress (S3 model sync, ECR, HuggingFace fallback) --------------
+    # cidr-scoped to the configured destination (default 0.0.0.0/0 for the
+    # public S3/ECR/HF endpoints via the NAT gateway). Tighten to VPC endpoint
+    # CIDRs if the cluster uses private S3/ECR endpoints.
+    - to:
+        {{- range .Values.networkPolicy.egressHTTPS.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- if .Values.networkPolicy.awsMetadata.enabled }}
+    # --- AWS credential endpoint (link-local) — REQUIRED for Pod Identity -----
+    # The EKS Pod Identity agent serves IAM creds at 169.254.170.23:80 (and
+    # IMDS at 169.254.169.254). The model-download Job's `aws s3 sync` fetches
+    # its S3 credentials from here. Without this rule the default-deny egress
+    # blocks it -> "Connect timeout on endpoint URL: http://169.254.170.23/...".
+    # 169.254.0.0/16 is node-local link-local (not routable off-node) => safe.
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.awsMetadata.cidr | quote }}
+      ports:
+        {{- range .Values.networkPolicy.awsMetadata.ports }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+{{- end }}

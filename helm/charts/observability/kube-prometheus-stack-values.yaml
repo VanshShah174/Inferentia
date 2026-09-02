@@ -1,0 +1,103 @@
+# =============================================================================
+# kube-prometheus-stack — values overlay for Inferentia
+# =============================================================================
+# We CONSUME the upstream kube-prometheus-stack chart (Prometheus Operator +
+# Prometheus + Alertmanager + Grafana in one) and only override values.
+# Install:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm upgrade --install kube-prom-stack prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace -f kube-prometheus-stack-values.yaml
+#
+# Key intent:
+#   - Prometheus discovers OUR ServiceMonitors across the inference-* namespaces
+#     (the chart already emits one per environment).
+#   - Grafana auto-loads the vLLM dashboard via the dashboard sidecar
+#     (ConfigMaps labelled grafana_dashboard=1).
+#   - Alertmanager routes vLLM alerts to a placeholder webhook receiver
+#     (the Claude enrichment webhook is a deferred Tier-2 unit).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Prometheus
+# -----------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    # Discover ServiceMonitors in ALL namespaces (our inference-* ones included),
+    # not only those carrying the release label. Simplest correct setting for a
+    # cross-namespace app + operator in a different namespace.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {} # all namespaces
+    serviceMonitorSelector: {} # all ServiceMonitors
+    ruleSelectorNilUsesHelmValues: false
+    ruleNamespaceSelector: {}
+    ruleSelector: {}
+    retention: 15d
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    # Modest storage for a portfolio cluster.
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+# -----------------------------------------------------------------------------
+# Grafana
+# -----------------------------------------------------------------------------
+grafana:
+  enabled: true
+  defaultDashboardsEnabled: true # the standard K8s dashboards
+  # The sidecar watches for ConfigMaps labelled grafana_dashboard=1 and loads
+  # them automatically — that's how our vLLM dashboard JSON gets in.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # For a demo; set a real secret / SSO for anything beyond local.
+  adminPassword: "changeme-in-real-deploy"
+
+# -----------------------------------------------------------------------------
+# Alertmanager — route vLLM alerts to the (future) enrichment webhook
+# -----------------------------------------------------------------------------
+alertmanager:
+  enabled: true
+  config:
+    route:
+      receiver: "default"
+      group_by: ["alertname", "namespace"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 3h
+      routes:
+        # vLLM SLO alerts -> the enrichment webhook (Tier-2, not built yet).
+        - matchers:
+            - "app = vllm-inference"
+          receiver: "vllm-webhook"
+    receivers:
+      - name: "default"
+      - name: "vllm-webhook"
+        # PLACEHOLDER: kagent (the planned AI-ops capstone) will handle alert
+        # response via its MCP tools. Until kagent is deployed, vLLM alerts
+        # route to this receiver but no webhook fires (intentionally inert).
+        # After deploying kagent, set its webhook URL here.
+        webhook_configs:
+          - url: "http://kagent.kagent.svc.cluster.local:8080/webhook"
+            send_resolved: true
+
+# We rely on kube-state-metrics + node-exporter defaults (kept on).
