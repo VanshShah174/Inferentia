@@ -78,11 +78,16 @@ serving:
 
 # -- Resource Requests and Limits
 resources:
+  # dev sizing: fits alongside platform add-ons (Kyverno/Prometheus/KEDA/ArgoCD)
+  # on a shared t3.large node (~1.93 vCPU allocatable each). A 2-core REQUEST
+  # could not schedule ("Insufficient cpu"). vLLM CPU inference for a 0.5B model
+  # is memory-bound, so a modest CPU request with a burst limit is right.
+  # (ppd/prod request more on dedicated headroom — see their values files.)
   requests:
-    cpu: "2"
-    memory: "4Gi"
+    cpu: "750m"
+    memory: "3Gi"
   limits:
-    cpu: "4"
+    cpu: "3"
     memory: "8Gi"
 
 # -- Persistent Volume (model weights storage)
@@ -173,6 +178,19 @@ networkPolicy:
   egressHTTPS:
     cidrs:
       - 0.0.0.0/0
+
+  # AWS credential endpoints (link-local). REQUIRED for Pod Identity / IMDS:
+  # the EKS Pod Identity agent serves creds at 169.254.170.23:80 and IMDS at
+  # 169.254.169.254:80. Without egress to this range, `aws s3 sync` in the
+  # model-download Job cannot fetch credentials and times out
+  # ("Connect timeout on endpoint URL: http://169.254.170.23/v1/credentials").
+  # 169.254.0.0/16 is the node-local link-local range — safe, not routable off-node.
+  awsMetadata:
+    enabled: true
+    cidr: 169.254.0.0/16
+    ports:
+      - 80
+      - 443
 
 # -- Pod Security Context
 securityContext:

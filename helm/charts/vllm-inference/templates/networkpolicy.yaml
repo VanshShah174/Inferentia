@@ -145,4 +145,20 @@ spec:
       ports:
         - port: 443
           protocol: TCP
+    {{- if .Values.networkPolicy.awsMetadata.enabled }}
+    # --- AWS credential endpoint (link-local) — REQUIRED for Pod Identity -----
+    # The EKS Pod Identity agent serves IAM creds at 169.254.170.23:80 (and
+    # IMDS at 169.254.169.254). The model-download Job's `aws s3 sync` fetches
+    # its S3 credentials from here. Without this rule the default-deny egress
+    # blocks it -> "Connect timeout on endpoint URL: http://169.254.170.23/...".
+    # 169.254.0.0/16 is node-local link-local (not routable off-node) => safe.
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.awsMetadata.cidr | quote }}
+      ports:
+        {{- range .Values.networkPolicy.awsMetadata.ports }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
 {{- end }}
