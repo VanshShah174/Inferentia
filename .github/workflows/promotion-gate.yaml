@@ -1,0 +1,139 @@
+# =============================================================================
+# Promotion Gate — final verification before production (main)
+# =============================================================================
+# Runs on: PR to main
+# Purpose: This is the release gate. It does NOT build, does NOT scan, does
+#          NOT sign. It only VERIFIES that the artifact being promoted is the
+#          exact same signed image that earned its signature at ppd, and that
+#          ppd has been healthy long enough to trust the promotion.
+#
+#          Human approval is enforced by GitHub branch protection (required
+#          reviewers on main), not by this workflow. This workflow is the
+#          machine half of the gate; the review is the human half.
+#
+# GATING: cosign verify needs the registry + signature to exist. Until the
+#         Terraform/EKS stage wires those, verification is gated behind
+#         vars.REGISTRY_ENABLED and reports what it WOULD verify.
+# =============================================================================
+name: Promotion gate
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: promote-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ca-central-1
+  IMAGE_NAME: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.ca-central-1.amazonaws.com/inferentia/vllm-cpu
+  # Sigstore identity constraints — the signature must have been produced by
+  # THIS repo's sign-and-publish workflow via GitHub's OIDC issuer.
+  CERT_IDENTITY_REGEXP: "https://github.com/VanshShah174/Inferentia/.github/workflows/sign-and-publish.yaml@.*"
+  CERT_OIDC_ISSUER: "https://token.actions.githubusercontent.com"
+
+jobs:
+  verify:
+    name: Verify signed artifact & ppd health
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # needed for cosign verify against Sigstore
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # -----------------------------------------------------------------------
+      # Resolve the digest of the artifact under promotion from ECR (the
+      # registry is the source of truth). We verify the EXACT digest that ppd
+      # signed, by asking ECR for this commit's tag. Read-only ECR access via
+      # the OIDC verify role (no push perms, no static keys).
+      # -----------------------------------------------------------------------
+      - name: Configure AWS credentials (OIDC)
+        if: vars.REGISTRY_ENABLED == 'true'
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        with:
+          role-to-assume: ${{ vars.AWS_CI_VERIFY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        if: vars.REGISTRY_ENABLED == 'true'
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076 # v2.0.1
+
+      - name: Resolve image reference (by digest from ECR)
+        id: ref
+        run: |
+          if [ "${{ vars.REGISTRY_ENABLED }}" = "true" ]; then
+            DIGEST=$(aws ecr describe-images \
+              --repository-name inferentia/vllm-cpu \
+              --image-ids imageTag=${{ github.sha }} \
+              --region "${AWS_REGION}" \
+              --query 'imageDetails[0].imageDigest' --output text)
+            REF="${{ env.IMAGE_NAME }}@${DIGEST}"
+          else
+            REF="${{ env.IMAGE_NAME }}:${{ github.sha }}"
+            echo "::warning::REGISTRY_ENABLED != true — using SHA tag (registry not wired)."
+          fi
+          echo "image_ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "Promotion target: ${REF}"
+
+      # -----------------------------------------------------------------------
+      # Verify the Cosign signature. This is the core of the gate: it proves
+      # the image was signed by our ppd workflow and has not been swapped.
+      # -----------------------------------------------------------------------
+      - name: Install Cosign
+        if: vars.REGISTRY_ENABLED == 'true'
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Verify Cosign signature
+        if: vars.REGISTRY_ENABLED == 'true'
+        # Keyless verify is stable in Cosign v2.x — no COSIGN_EXPERIMENTAL needed.
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "${CERT_IDENTITY_REGEXP}" \
+            --certificate-oidc-issuer "${CERT_OIDC_ISSUER}" \
+            "${{ steps.ref.outputs.image_ref }}"
+
+      - name: Verify SBOM attestation
+        if: vars.REGISTRY_ENABLED == 'true'
+        run: |
+          cosign verify-attestation --type spdxjson \
+            --certificate-identity-regexp "${CERT_IDENTITY_REGEXP}" \
+            --certificate-oidc-issuer "${CERT_OIDC_ISSUER}" \
+            "${{ steps.ref.outputs.image_ref }}"
+
+      # -----------------------------------------------------------------------
+      # ppd health check — confirm the pre-prod environment has been running
+      # the candidate without regressions before we let it into production.
+      # Gated behind cluster access (added at EKS stage).
+      # -----------------------------------------------------------------------
+      - name: Set up Python
+        if: vars.CLUSTER_ACCESS_ENABLED == 'true'
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.11'
+
+      - name: ppd promotion health check
+        if: vars.CLUSTER_ACCESS_ENABLED == 'true'
+        run: |
+          python ci/scripts/promotion-gate-check.py \
+            --environment ppd \
+            --min-healthy-duration 2h
+
+      - name: Gate summary
+        if: always()
+        run: |
+          echo "Promotion candidate: ${{ steps.ref.outputs.image_ref }}"
+          if [ "${{ vars.REGISTRY_ENABLED }}" != "true" ]; then
+            echo "REGISTRY_ENABLED != true — signature verification skipped (registry not wired yet)."
+          fi
+          if [ "${{ vars.CLUSTER_ACCESS_ENABLED }}" != "true" ]; then
+            echo "CLUSTER_ACCESS_ENABLED != true — ppd health check skipped (no cluster yet)."
+          fi
+          echo "Human approval is enforced by branch protection on main."

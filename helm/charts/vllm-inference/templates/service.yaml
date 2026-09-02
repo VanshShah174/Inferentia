@@ -1,0 +1,24 @@
+# =============================================================================
+# Service — Internal Network Endpoint for vLLM
+# =============================================================================
+# ClusterIP service exposing the vLLM API within the cluster.
+# The Gateway API (Envoy) and llm-d EPP route external traffic to this service.
+# Other internal services (K8sGPT, alert-enricher) also call this directly.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vllm-inference.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "vllm-inference.selectorLabels" . | nindent 4 }}

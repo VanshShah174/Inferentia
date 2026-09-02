@@ -1,0 +1,226 @@
+# =============================================================================
+# vllm-inference — Default Values (Dev Environment)
+# =============================================================================
+# These values are the baseline. Override per environment:
+#   Dev:  values.yaml (this file)
+#   Prod: values-prod.yaml
+# =============================================================================
+
+# -- Namespace (base = dev; overridden per environment in values-<env>.yaml).
+# MUST match the ApplicationSet destination namespace for this environment,
+# because every template pins resources to .Values.namespace.
+namespace: inference-dev
+
+# -- ServiceAccount
+# The model-download pod runs as THIS ServiceAccount. On EKS a Pod Identity
+# association (in Terraform) maps (cluster, namespace, this SA) -> the S3-read
+# IAM role, so `aws s3 sync` gets credentials with NO static keys and NO IRSA
+# role-arn annotation. If the pod ran as the `default` SA it would have no
+# association and S3 access would fail with "Unable to locate credentials".
+serviceAccount:
+  create: true
+  name: "vllm-model-loader"
+
+# -- Model Configuration
+# BASE = dev-on-EKS. dev pulls the same S3-seeded artifact as the other
+# environments (source: s3) so it faithfully rehearses the Pod-Identity -> S3
+# -> PVC path. (Local/kind runs use values-kind.yaml with source: huggingface.)
+model:
+  name: "Qwen/Qwen2.5-0.5B-Instruct"
+  revision: "main"
+  # Source for model download job (s3 or huggingface)
+  source: "s3"
+  # S3 bucket seeded once via scripts/seed-model.sh. INJECTED at sync time by
+  # the ArgoCD ApplicationSet (helm.parameters model.s3Bucket) so no account id
+  # lives in git. Empty here on purpose; the chart is cloud-agnostic.
+  s3Bucket: ""
+  s3Key: "Qwen2.5-0.5B-Instruct/"
+
+# -- Container Image
+# dev pulls the UNSIGNED image from ECR (seeded once via scripts/seed-ecr.sh,
+# then replaced by CI at the first PR dev->qa). Kyverno does NOT require a
+# signature in dev (signing starts at ppd), so an unsigned image is valid here.
+# repository is INJECTED at sync time by the ArgoCD ApplicationSet
+# (helm.parameters image.repository) — empty here so the chart carries no
+# account id / cloud reference. The deployment template fails loudly if it
+# stays empty (i.e. someone deploys without the override).
+image:
+  repository: ""
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# -- Model Downloader Job
+modelDownloader:
+  enabled: true
+  image:
+    repository: python
+    tag: "3.11-slim"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+
+# -- vLLM Serving Configuration
+serving:
+  replicas: 1
+  dtype: "bfloat16"
+  maxModelLen: 512
+  enforceEager: true
+  port: 8000
+  # Environment variables
+  env:
+    VLLM_CPU_KVCACHE_SPACE: "1"
+    VLLM_TARGET_DEVICE: "cpu"
+    TOKENIZERS_PARALLELISM: "false"
+
+# -- Resource Requests and Limits
+resources:
+  # dev sizing: fits alongside platform add-ons (Kyverno/Prometheus/KEDA/ArgoCD)
+  # on a shared t3.large node (~1.93 vCPU allocatable each). A 2-core REQUEST
+  # could not schedule ("Insufficient cpu"). vLLM CPU inference for a 0.5B model
+  # is memory-bound, so a modest CPU request with a burst limit is right.
+  # (ppd/prod request more on dedicated headroom — see their values files.)
+  requests:
+    cpu: "750m"
+    memory: "3Gi"
+  limits:
+    cpu: "3"
+    memory: "8Gi"
+
+# -- Persistent Volume (model weights storage)
+persistence:
+  enabled: true
+  storageClass: ""  # Uses cluster default (gp3 on EKS)
+  size: 5Gi
+  accessMode: ReadWriteOnce
+
+# -- Shared Memory (required by vLLM for IPC)
+shmSize: 1Gi
+
+# -- Health Probes
+probes:
+  readiness:
+    path: /health
+    port: 8000
+    initialDelaySeconds: 120
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  liveness:
+    path: /health
+    port: 8000
+    initialDelaySeconds: 180
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 5
+
+# -- Service
+service:
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+
+# -- ServiceMonitor (Prometheus scraping)
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  path: /metrics
+
+# -- Autoscaling (HPA stub — KEDA in production)
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetKVCacheUtilization: 70
+
+# -- NetworkPolicy (namespace segmentation — defense in depth)
+# Kyverno controls ADMISSION; these control TRAFFIC. Baseline is default-deny
+# ingress, then :8000 is re-opened ONLY to the Gateway/EPP and Prometheus, and
+# egress is scoped to DNS + HTTPS (S3/ECR/HF model pull).
+#
+# ENFORCEMENT: requires a CNI that honors NetworkPolicy. On EKS this is the VPC
+# CNI network-policy feature (enabled in the eks Terraform module). On kind the
+# default CNI does NOT enforce it, so values-kind.yaml sets enabled: false.
+networkPolicy:
+  enabled: true
+
+  # Allow in-namespace pods to reach vLLM :8000 (e.g. a co-located EPP or an
+  # in-cluster smoke-test pod). Set false to force ALL serving traffic through
+  # the Gateway/EPP namespace only.
+  allowSameNamespace: true
+
+  # Where the Gateway API / llm-d EPP runs. The namespace MUST carry this label
+  # (kubernetes.io/metadata.name is auto-applied by K8s to every namespace, so
+  # this works without extra labeling). podSelector is optional and AND-ed with
+  # the namespace match; leave empty ({}) to allow any pod in that namespace.
+  gateway:
+    namespaceSelector:
+      kubernetes.io/metadata.name: inference-gateway
+    podSelector: {}
+
+  # Where Prometheus runs (kube-prometheus-stack default namespace). Ingress
+  # from here is allowed to :8000 so the ServiceMonitor scrape is not dropped.
+  prometheus:
+    namespaceSelector:
+      kubernetes.io/metadata.name: monitoring
+
+  # kube-dns / CoreDNS namespace for egress DNS resolution.
+  dns:
+    namespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+
+  # HTTPS (443) egress destinations for the model-download Job (S3 via Pod
+  # Identity, ECR, HuggingFace fallback). Default is open to the internet via
+  # the NAT gateway; tighten to VPC endpoint CIDRs for private S3/ECR.
+  egressHTTPS:
+    cidrs:
+      - 0.0.0.0/0
+
+  # AWS credential endpoints (link-local). REQUIRED for Pod Identity / IMDS:
+  # the EKS Pod Identity agent serves creds at 169.254.170.23:80 and IMDS at
+  # 169.254.169.254:80. Without egress to this range, `aws s3 sync` in the
+  # model-download Job cannot fetch credentials and times out
+  # ("Connect timeout on endpoint URL: http://169.254.170.23/v1/credentials").
+  # 169.254.0.0/16 is the node-local link-local range — safe, not routable off-node.
+  awsMetadata:
+    enabled: true
+    cidr: 169.254.0.0/16
+    ports:
+      - 80
+      - 443
+
+# -- Pod Security Context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# -- Container Security Context
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false  # vLLM needs to write to cache dirs
+  capabilities:
+    drop:
+      - ALL
+
+# -- Node Selector (for targeting inference nodes)
+nodeSelector: {}
+  # node-role: inference
+
+# -- Tolerations
+tolerations: []
+
+# -- Affinity
+affinity: {}
+
+# -- Labels applied to all resources
+# NOTE: app.kubernetes.io/component is intentionally NOT here — it is
+# per-resource (inference vs. model-downloader), so each template sets its
+# own. Putting it in commonLabels caused a duplicate-key collision in the
+# model-download Job.
+commonLabels:
+  app.kubernetes.io/part-of: inferentia

@@ -1,0 +1,81 @@
+# =============================================================================
+# Kyverno ClusterPolicy — verify Cosign signatures on inference images
+# =============================================================================
+# THE PAYOFF OF THE CI SUPPLY CHAIN. The pipeline signs the image at ppd
+# (sign-and-publish.yaml, Cosign keyless via Sigstore). This policy enforces
+# that signature AT ADMISSION: the cluster refuses to run any Inferentia ECR
+# image that was not signed by our workflow. Even if someone bypassed CI and
+# pushed an unsigned image, Kubernetes rejects the pod.
+#
+# Trust chain closed:
+#   build -> scan -> SIGN (ppd) -> promotion verify (main) -> ADMISSION VERIFY (here)
+#
+# Keyless verification (no long-lived keys): the signature's certificate must
+# have been issued by GitHub's OIDC issuer to OUR sign-and-publish workflow
+# identity. That identity binding is what makes the signature trustworthy.
+# =============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signatures
+  annotations:
+    policies.kyverno.io/title: Verify Inferentia Image Signatures (Cosign keyless)
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Requires that all Inferentia container images pulled from the project's
+      ECR registry carry a valid Cosign keyless signature produced by the
+      sign-and-publish GitHub Actions workflow. Unsigned or untrusted images
+      are rejected at admission.
+spec:
+  validationFailureAction: Enforce # block on failure (Audit to observe first)
+  background: false # signature checks need registry access; not for background scans
+  webhookTimeoutSeconds: 30
+  failurePolicy: Fail
+  rules:
+    - name: verify-inferentia-ecr-signature
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              # SCOPE: ppd + prod ONLY. Signing happens at the PR->ppd stage
+              # (sign-and-publish.yaml) — so the signed image first EXISTS at
+              # ppd. dev and qa run the same image UNSIGNED (dev = seeded/local,
+              # qa = built by build-and-scan but not yet signed). Enforcing a
+              # signature there would apply the strictest supply-chain gate to
+              # the loosest environments, inverting the progressive-security
+              # model. Signature enforcement therefore begins where signing
+              # begins: ppd. (Pod-security + resource-hygiene policies still
+              # cover dev + qa — only the SIGNATURE requirement is scoped here.)
+              namespaces:
+                - inference-ppd
+                - inference-prod
+      verifyImages:
+        # Only OUR ECR images are subject to this rule. Base/sidecar images
+        # from elsewhere are out of scope for THIS policy (a stricter posture
+        # could require signatures on everything, but that breaks upstream
+        # images that aren't signed by us).
+        - imageReferences:
+            - "*.dkr.ecr.ca-central-1.amazonaws.com/inferentia/*"
+          # Rewrite the tag to the verified digest so what runs == what we
+          # verified (defeats tag-mutation between verify and pull).
+          mutateDigest: true
+          verifyDigest: true
+          required: true
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    # The signing identity MUST be our sign-and-publish workflow.
+                    # subjectRegExp (not subject) accepts BOTH branch and PR-merge
+                    # refs because sign-and-publish runs on pull_request events —
+                    # so the Fulcio cert subject is ...@refs/pull/<N>/merge, not
+                    # ...@refs/heads/ppd. The trust assertion that matters is
+                    # WORKFLOW IDENTITY + REPO (who signed), not the ref (when it
+                    # ran). Both refs map to the same sign-and-publish.yaml in this
+                    # repo, signed via GitHub OIDC — so both are trustworthy.
+                    subjectRegExp: "https://github.com/VanshShah174/Inferentia/.github/workflows/sign-and-publish.yaml@refs/(heads/ppd|pull/[0-9]+/merge)"
+                    issuer: "https://token.actions.githubusercontent.com"
+                    rekor:
+                      url: "https://rekor.sigstore.dev"
