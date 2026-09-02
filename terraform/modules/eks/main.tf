@@ -213,11 +213,31 @@ data "aws_eks_addon_version" "ebs_csi" {
   most_recent        = true
 }
 
-resource "aws_eks_addon" "ebs_csi" {
-  cluster_name             = aws_eks_cluster.this.name
-  addon_name               = "aws-ebs-csi-driver"
-  addon_version            = data.aws_eks_addon_version.ebs_csi.version
-  service_account_role_arn = aws_iam_role.ebs_csi.arn
+# Pod Identity association: bind the EBS CSI role to the driver's controller
+# ServiceAccount. This is the credential path (NOT IRSA). Setting
+# service_account_role_arn on the addon instead would activate the IRSA
+# web-identity path, which fails on this cluster (no IRSA OIDC provider — we
+# use Pod Identity by design) with InvalidIdentityToken. The association +
+# the Pod Identity Agent addon is what actually delivers creds to the pod.
+resource "aws_eks_pod_identity_association" "ebs_csi" {
+  cluster_name    = aws_eks_cluster.this.name
+  namespace       = "kube-system"
+  service_account = "ebs-csi-controller-sa"
+  role_arn        = aws_iam_role.ebs_csi.arn
 
-  depends_on = [aws_eks_node_group.this]
+  depends_on = [aws_eks_addon.pod_identity]
+}
+
+resource "aws_eks_addon" "ebs_csi" {
+  cluster_name = aws_eks_cluster.this.name
+  addon_name   = "aws-ebs-csi-driver"
+  # Version pinned by the data source. Credentials come via the Pod Identity
+  # association above (pods.eks.amazonaws.com), NOT via service_account_role_arn
+  # (that would be the IRSA path, which this cluster does not support).
+  addon_version = data.aws_eks_addon_version.ebs_csi.version
+
+  depends_on = [
+    aws_eks_node_group.this,
+    aws_eks_pod_identity_association.ebs_csi,
+  ]
 }
