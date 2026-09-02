@@ -96,3 +96,65 @@ module "github_oidc" {
   github_repo_id     = var.github_repo_id
   ecr_repository_arn = module.ecr.repository_arns["vllm-cpu"]
 }
+
+# -----------------------------------------------------------------------------
+# Kyverno ECR read — Pod Identity for image-signature verification
+# -----------------------------------------------------------------------------
+# The verify-image-signatures ClusterPolicy (Enforce in ppd/prod) must pull the
+# image manifest from ECR to check its Cosign signature. Kyverno's admission
+# controller SA has no AWS creds by default, so verification fails with
+# "401 Unauthorized" fetching the manifest — blocking even correctly-signed
+# images. This grants the admission controller READ-ONLY ECR access via EKS Pod
+# Identity (same zero-static-keys pattern as the model-loader): trust the
+# pods.eks.amazonaws.com principal, associate (cluster, kyverno ns, admission
+# controller SA) -> this role. No imagePullSecret, no static keys.
+data "aws_iam_policy_document" "kyverno_ecr_trust" {
+  statement {
+    actions = ["sts:AssumeRole", "sts:TagSession"]
+    principals {
+      type        = "Service"
+      identifiers = ["pods.eks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "kyverno_ecr_read" {
+  name               = "${local.name_prefix}-kyverno-ecr-read"
+  assume_role_policy = data.aws_iam_policy_document.kyverno_ecr_trust.json
+}
+
+data "aws_iam_policy_document" "kyverno_ecr_read" {
+  # GetAuthorizationToken is account-wide (no resource ARN).
+  statement {
+    sid       = "EcrAuth"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  # Read the image manifest + layers to verify the signature. Scoped to the
+  # one vllm-cpu repo.
+  statement {
+    sid    = "EcrRead"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage",
+      "ecr:DescribeImages",
+    ]
+    resources = [module.ecr.repository_arns["vllm-cpu"]]
+  }
+}
+
+resource "aws_iam_role_policy" "kyverno_ecr_read" {
+  name   = "${local.name_prefix}-kyverno-ecr-read"
+  role   = aws_iam_role.kyverno_ecr_read.id
+  policy = data.aws_iam_policy_document.kyverno_ecr_read.json
+}
+
+resource "aws_eks_pod_identity_association" "kyverno_ecr_read" {
+  cluster_name    = module.eks.cluster_name
+  namespace       = "kyverno"
+  service_account = "kyverno-admission-controller"
+  role_arn        = aws_iam_role.kyverno_ecr_read.arn
+}
