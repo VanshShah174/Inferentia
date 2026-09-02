@@ -37,7 +37,8 @@ permissions:
   contents: read
 
 env:
-  IMAGE_NAME: ghcr.io/vanshshah174/inferentia/vllm-cpu
+  AWS_REGION: ca-central-1
+  IMAGE_NAME: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.ca-central-1.amazonaws.com/inferentia/vllm-cpu
 
 jobs:
   sign:
@@ -49,46 +50,45 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     permissions:
       contents: read
-      packages: write # push the signature to the registry
-      id-token: write # Sigstore keyless OIDC
+      id-token: write # OIDC: assume the ECR-push role + Sigstore keyless signing
       pull-requests: write # post the triage comment
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # -----------------------------------------------------------------------
-      # KNOWN LIMITATION (cross-workflow artifacts):
-      # build-and-scan.yaml and this workflow are SEPARATE workflows triggered
-      # by the same PR event — they are sibling runs, not parent/child. So
-      # actions/download-artifact CANNOT see build-and-scan's `image-digest`
-      # artifact by run-id here (that only works within one workflow run, or
-      # via a workflow_run trigger). This step is therefore best-effort and
-      # will normally miss, falling through to registry resolution below.
-      #
-      # TODO(registry): once the registry is wired (Terraform/EKS stage), the
-      # digest becomes the registry's source of truth. Resolve it directly with
-      #   crane digest / docker buildx imagetools inspect
-      # instead of relying on a cross-workflow artifact. Remove this download
-      # step at that point.
+      # Resolve the artifact by DIGEST from ECR (the registry is the source of
+      # truth). build-and-scan pushed the image tagged with this same
+      # github.sha; we ask ECR for that tag's immutable digest and sign
+      # NAME@sha256:... — never a tag. This is what makes "sign the exact image
+      # that was tested" real, and it replaces the old best-effort cross-
+      # workflow artifact download (sibling runs can't share artifacts).
       # -----------------------------------------------------------------------
-      - name: Download image digest artifact (best-effort, same-run only)
-        id: getdigest
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+      - name: Configure AWS credentials (OIDC)
+        if: vars.REGISTRY_ENABLED == 'true'
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
         with:
-          name: image-digest
-        continue-on-error: true
+          role-to-assume: ${{ vars.AWS_CI_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Resolve image reference
+      - name: Log in to Amazon ECR
+        if: vars.REGISTRY_ENABLED == 'true'
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076 # v2.0.1
+
+      - name: Resolve image reference (by digest from ECR)
         id: ref
         run: |
-          # Preferred (future): resolve digest from the registry once wired.
-          # TODO(registry): replace the fallback below with e.g.
-          #   REF="${{ env.IMAGE_NAME }}@$(crane digest ${{ env.IMAGE_NAME }}:${{ github.sha }})"
-          if [ -f image-digest.txt ]; then
-            REF="$(cat image-digest.txt)"
+          if [ "${{ vars.REGISTRY_ENABLED }}" = "true" ]; then
+            # imageDigest for the tag pushed by build-and-scan (this PR's SHA).
+            DIGEST=$(aws ecr describe-images \
+              --repository-name inferentia/vllm-cpu \
+              --image-ids imageTag=${{ github.sha }} \
+              --region "${AWS_REGION}" \
+              --query 'imageDetails[0].imageDigest' --output text)
+            REF="${{ env.IMAGE_NAME }}@${DIGEST}"
           else
             REF="${{ env.IMAGE_NAME }}:${{ github.sha }}"
-            echo "::warning::digest artifact not available cross-workflow — using SHA tag. Resolve by digest from the registry once wired (see TODO)."
+            echo "::warning::REGISTRY_ENABLED != true — using SHA tag (registry not wired)."
           fi
           echo "image_ref=${REF}" >> "$GITHUB_OUTPUT"
           echo "Signing target: ${REF}"
@@ -101,18 +101,6 @@ jobs:
         uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
         with:
           cosign-release: 'v2.4.1'
-
-      - name: Log in to GHCR
-        if: vars.REGISTRY_ENABLED == 'true'
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull tested image (by digest — never rebuild)
-        if: vars.REGISTRY_ENABLED == 'true'
-        run: docker pull "${{ steps.ref.outputs.image_ref }}"
 
       - name: Cosign sign (keyless)
         if: vars.REGISTRY_ENABLED == 'true'
