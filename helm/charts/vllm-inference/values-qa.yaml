@@ -61,3 +61,9 @@ shmSize: 1Gi
 # -- Autoscaling OFF in QA (functional validation, not load testing)
 autoscaling:
   enabled: false
+
+# -- NetworkPolicy: INHERITED from values.yaml (enabled: true, same gateway /
+# prometheus / dns / egress selectors as every EKS env). Not repeated here
+# because it does not differ in QA — the segmentation baseline is identical
+# across dev/qa/ppd/prod. Override here ONLY if QA needs a different network
+# posture (it does not). Local kind disables it in values-kind.yaml.

@@ -86,3 +86,9 @@ affinity:
                 values:
                   - vllm-inference
           topologyKey: topology.kubernetes.io/zone
+
+# -- NetworkPolicy: INHERITED from values.yaml (enabled: true, same gateway /
+# prometheus / dns / egress selectors as every EKS env). Not repeated here
+# because PPD's network posture is identical to the shared baseline. As the
+# prod rehearsal, PPD deliberately keeps the SAME segmentation as prod. Local
+# kind disables it in values-kind.yaml.

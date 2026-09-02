@@ -99,3 +99,8 @@ persistence:
 
 autoscaling:
   enabled: false
+
+# kind's default CNI (kindnet) does NOT enforce NetworkPolicy, so the policies
+# would be inert clutter locally. Disable them here; they run on EKS (VPC CNI).
+networkPolicy:
+  enabled: false

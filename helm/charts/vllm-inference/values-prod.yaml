@@ -95,3 +95,9 @@ affinity:
                 values:
                   - vllm-inference
           topologyKey: topology.kubernetes.io/zone
+
+# -- NetworkPolicy: INHERITED from values.yaml (enabled: true, same gateway /
+# prometheus / dns / egress selectors as every EKS env). Not repeated here
+# because prod uses the shared segmentation baseline unchanged. Override here
+# ONLY if prod ever needs a stricter posture than the other envs. Local kind
+# disables it in values-kind.yaml.

@@ -126,6 +126,49 @@ autoscaling:
   maxReplicas: 5
   targetKVCacheUtilization: 70
 
+# -- NetworkPolicy (namespace segmentation — defense in depth)
+# Kyverno controls ADMISSION; these control TRAFFIC. Baseline is default-deny
+# ingress, then :8000 is re-opened ONLY to the Gateway/EPP and Prometheus, and
+# egress is scoped to DNS + HTTPS (S3/ECR/HF model pull).
+#
+# ENFORCEMENT: requires a CNI that honors NetworkPolicy. On EKS this is the VPC
+# CNI network-policy feature (enabled in the eks Terraform module). On kind the
+# default CNI does NOT enforce it, so values-kind.yaml sets enabled: false.
+networkPolicy:
+  enabled: true
+
+  # Allow in-namespace pods to reach vLLM :8000 (e.g. a co-located EPP or an
+  # in-cluster smoke-test pod). Set false to force ALL serving traffic through
+  # the Gateway/EPP namespace only.
+  allowSameNamespace: true
+
+  # Where the Gateway API / llm-d EPP runs. The namespace MUST carry this label
+  # (kubernetes.io/metadata.name is auto-applied by K8s to every namespace, so
+  # this works without extra labeling). podSelector is optional and AND-ed with
+  # the namespace match; leave empty ({}) to allow any pod in that namespace.
+  gateway:
+    namespaceSelector:
+      kubernetes.io/metadata.name: inference-gateway
+    podSelector: {}
+
+  # Where Prometheus runs (kube-prometheus-stack default namespace). Ingress
+  # from here is allowed to :8000 so the ServiceMonitor scrape is not dropped.
+  prometheus:
+    namespaceSelector:
+      kubernetes.io/metadata.name: monitoring
+
+  # kube-dns / CoreDNS namespace for egress DNS resolution.
+  dns:
+    namespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+
+  # HTTPS (443) egress destinations for the model-download Job (S3 via Pod
+  # Identity, ECR, HuggingFace fallback). Default is open to the internet via
+  # the NAT gateway; tighten to VPC endpoint CIDRs for private S3/ECR.
+  egressHTTPS:
+    cidrs:
+      - 0.0.0.0/0
+
 # -- Pod Security Context
 securityContext:
   runAsNonRoot: true
