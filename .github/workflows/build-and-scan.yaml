@@ -109,13 +109,18 @@ jobs:
           directory: .
           quiet: true
           soft_fail: true
-          framework: terraform,helm,kubernetes,dockerfile
-          # output_format must be a SINGLE value. This checkov version's -o
-          # rejects a comma-joined value (e.g. "cli,sarif") — an argparse
-          # crash BEFORE scanning that soft_fail cannot suppress. sarif alone
-          # feeds the GitHub Security tab; console findings stay in the job log.
-          # (The action has no output_file_path input — it writes results.sarif
-          # itself; the scan-reports upload is best-effort with warn-if-missing.)
+          # BOTH framework and output_format must be SINGLE values: the action
+          # (checkov-action v12.1347.0) forwards each input verbatim as one
+          # argument, and this checkov rejects comma-joined values
+          # ("invalid choice: 'terraform,helm,...'" / "'cli,sarif'") — an
+          # argparse crash BEFORE scanning that soft_fail cannot suppress.
+          # 'all' covers terraform+helm+kubernetes+dockerfile (our stacks) plus
+          # secrets/github_actions. sarif feeds the GitHub Security tab; console
+          # findings remain in the job log. (No output_file_path input exists;
+          # the action writes results.sarif and the upload is warn-if-missing.)
+          # Verified locally: checkov -d . --framework all --soft-fail -o sarif
+          # exits 0 (Passed 109 / Failed 19, soft-failed).
+          framework: all
           output_format: sarif
 
       # -----------------------------------------------------------------------
