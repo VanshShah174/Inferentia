@@ -9,6 +9,18 @@
 #   - PVC (model weights): read-only at /models
 #   - emptyDir (shared memory): mounted at /dev/shm for vLLM IPC
 # =============================================================================
+# GUARD: image.repository is intentionally empty in the values files (it is
+# injected at sync time by the ArgoCD ApplicationSet helm.parameters, so no
+# account id lives in git). Fail LOUDLY here if it was not injected — otherwise
+# the pod would try to pull from an empty/invalid registry ref and fail with a
+# confusing ImagePullBackOff instead of a clear message. (values-kind.yaml sets
+# a real local repository, so kind installs pass this guard.)
+{{- if not .Values.image.repository }}
+{{- fail "image.repository is empty — inject it via the ArgoCD ApplicationSet helm.parameters (image.repository), or set it in values (e.g. values-kind.yaml) for a manual helm install." }}
+{{- end }}
+{{- if and (eq .Values.model.source "s3") (not .Values.model.s3Bucket) }}
+{{- fail "model.source is 's3' but model.s3Bucket is empty — inject it via the ArgoCD ApplicationSet helm.parameters (model.s3Bucket)." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

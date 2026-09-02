@@ -13,18 +13,20 @@
 # -- Namespace
 namespace: inference-ppd
 
-# -- Container Image (from ECR, signed by CI). Region ca-central-1.
+# -- Container Image (from ECR, signed by CI). repository INJECTED by the
+# ArgoCD ApplicationSet (helm.parameters) — empty here, chart stays generic.
 image:
-  repository: <AWS_ACCOUNT_ID>.dkr.ecr.ca-central-1.amazonaws.com/inferentia/vllm-cpu
+  repository: ""
   tag: "0.1.0"
   pullPolicy: IfNotPresent
 
-# -- Model Configuration (S3 source — same artifact promoted from qa)
+# -- Model Configuration (S3 source — same artifact promoted from qa).
+# s3Bucket INJECTED by the ApplicationSet (helm.parameters model.s3Bucket).
 model:
   name: "Qwen/Qwen2.5-0.5B-Instruct"
   revision: "main"
   source: "s3"
-  s3Bucket: "inferentia-model-store-<AWS_ACCOUNT_ID>"
+  s3Bucket: ""
   s3Key: "Qwen2.5-0.5B-Instruct/"
 
 # -- vLLM Serving (prod-like)

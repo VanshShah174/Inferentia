@@ -30,17 +30,22 @@ model:
   revision: "main"
   # Source for model download job (s3 or huggingface)
   source: "s3"
-  # S3 bucket + key (seeded once via scripts/seed-model.sh). <AWS_ACCOUNT_ID>
-  # is filled from Terraform output at deploy time.
-  s3Bucket: "inferentia-model-store-<AWS_ACCOUNT_ID>"
+  # S3 bucket seeded once via scripts/seed-model.sh. INJECTED at sync time by
+  # the ArgoCD ApplicationSet (helm.parameters model.s3Bucket) so no account id
+  # lives in git. Empty here on purpose; the chart is cloud-agnostic.
+  s3Bucket: ""
   s3Key: "Qwen2.5-0.5B-Instruct/"
 
 # -- Container Image
 # dev pulls the UNSIGNED image from ECR (seeded once via scripts/seed-ecr.sh,
 # then replaced by CI at the first PR dev->qa). Kyverno does NOT require a
 # signature in dev (signing starts at ppd), so an unsigned image is valid here.
+# repository is INJECTED at sync time by the ArgoCD ApplicationSet
+# (helm.parameters image.repository) — empty here so the chart carries no
+# account id / cloud reference. The deployment template fails loudly if it
+# stays empty (i.e. someone deploys without the override).
 image:
-  repository: <AWS_ACCOUNT_ID>.dkr.ecr.ca-central-1.amazonaws.com/inferentia/vllm-cpu
+  repository: ""
   tag: "0.1.0"
   pullPolicy: IfNotPresent
 

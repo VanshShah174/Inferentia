@@ -24,21 +24,36 @@ spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
 
+  # Account-specific values (ECR repo, S3 bucket) are injected as Helm
+  # parameters below, sourced from these per-env fields. The ${AWS_ACCOUNT_ID}
+  # / ${AWS_REGION} are SHELL placeholders (not Go-template): the bootstrap
+  # (argocd-install.sh) runs `envsubst` before `kubectl apply`, so the real
+  # account id lands ONLY in the running cluster object — never in git. The
+  # chart values files stay generic (image.repository / model.s3Bucket empty),
+  # so the chart itself is cloud-agnostic and the repo is fork-and-go.
   generators:
     - list:
         elements:
           - env: dev
             branch: dev
             valuesFile: values.yaml
+            ecrRepo: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/inferentia/vllm-cpu"
+            s3Bucket: "inferentia-model-store-${AWS_ACCOUNT_ID}"
           - env: qa
             branch: qa
             valuesFile: values-qa.yaml
+            ecrRepo: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/inferentia/vllm-cpu"
+            s3Bucket: "inferentia-model-store-${AWS_ACCOUNT_ID}"
           - env: ppd
             branch: ppd
             valuesFile: values-ppd.yaml
+            ecrRepo: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/inferentia/vllm-cpu"
+            s3Bucket: "inferentia-model-store-${AWS_ACCOUNT_ID}"
           - env: prod
             branch: main
             valuesFile: values-prod.yaml
+            ecrRepo: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/inferentia/vllm-cpu"
+            s3Bucket: "inferentia-model-store-${AWS_ACCOUNT_ID}"
 
   template:
     metadata:
@@ -56,6 +71,15 @@ spec:
         helm:
           valueFiles:
             - '{{.valuesFile}}'
+          # Inject account-specific values so the chart values files stay
+          # generic (image.repository / model.s3Bucket are empty in git). These
+          # override the empty defaults at sync time. The chart FAILS LOUDLY
+          # (deployment.yaml guard) if image.repository is ever empty here.
+          parameters:
+            - name: image.repository
+              value: '{{.ecrRepo}}'
+            - name: model.s3Bucket
+              value: '{{.s3Bucket}}'
 
       destination:
         server: https://kubernetes.default.svc

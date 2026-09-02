@@ -30,8 +30,27 @@ echo ">> Waiting for argocd-server to become available..."
 kubectl wait --for=condition=available --timeout=300s \
   deploy/argocd-server -n argocd
 
+# The ApplicationSet keeps account-specific values as SHELL placeholders
+# (${AWS_ACCOUNT_ID} / ${AWS_REGION}) so no account id is committed to git.
+# envsubst injects the real values here, at apply time — they land only in the
+# running cluster object. AWS_ACCOUNT_ID is the same var the seed scripts use.
+: "${AWS_REGION:=ca-central-1}"
+if [ -z "${AWS_ACCOUNT_ID:-}" ]; then
+  echo ">> AWS_ACCOUNT_ID not set; resolving via STS..."
+  AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+fi
+export AWS_ACCOUNT_ID AWS_REGION
+echo ">> Injecting account ${AWS_ACCOUNT_ID} / region ${AWS_REGION} into the ApplicationSet..."
+
+command -v envsubst >/dev/null 2>&1 || {
+  echo "ERROR: envsubst not found (install gettext: 'apt-get install gettext-base' / 'brew install gettext')." >&2
+  exit 1
+}
+
 echo ">> Applying the Inferentia ApplicationSet (generates dev/qa/ppd/prod apps)..."
-kubectl apply -f argocd/appsets/vllm-appset.yaml
+# Only substitute our two vars; leave any other $... (none today) untouched.
+envsubst '${AWS_ACCOUNT_ID} ${AWS_REGION}' < argocd/appsets/vllm-appset.yaml \
+  | kubectl apply -f -
 
 echo ">> Done. Applications:"
 kubectl get applications -n argocd

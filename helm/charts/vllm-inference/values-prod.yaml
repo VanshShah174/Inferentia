@@ -18,19 +18,20 @@
 # ApplicationSet destination for prod)
 namespace: inference-prod
 
-# -- Container Image (from ECR, signed by CI)
+# -- Container Image (from ECR, signed by CI). repository INJECTED by the
+# ArgoCD ApplicationSet (helm.parameters) — empty here, chart stays generic.
 image:
-  repository: <AWS_ACCOUNT_ID>.dkr.ecr.ca-central-1.amazonaws.com/inferentia/vllm-cpu
+  repository: ""
   tag: "0.1.0"
   pullPolicy: IfNotPresent
 
-# -- Model Configuration (SAME bucket + key as qa/ppd — one artifact promoted,
-# matches the Terraform model-store bucket inferentia-model-store-<account_id>)
+# -- Model Configuration (SAME bucket + key as qa/ppd — one artifact promoted).
+# s3Bucket INJECTED by the ApplicationSet (helm.parameters model.s3Bucket).
 model:
   name: "Qwen/Qwen2.5-0.5B-Instruct"
   revision: "main"
   source: "s3"
-  s3Bucket: "inferentia-model-store-<AWS_ACCOUNT_ID>"
+  s3Bucket: ""
   s3Key: "Qwen2.5-0.5B-Instruct/"
 
 # -- vLLM Serving Configuration (production tuned)
