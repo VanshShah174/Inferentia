@@ -79,3 +79,20 @@ module "pod_identity" {
   namespaces       = var.inference_namespaces
   service_account  = var.model_service_account
 }
+
+# -----------------------------------------------------------------------------
+# GitHub OIDC — keyless CI -> ECR (no static AWS keys in GitHub Secrets)
+# -----------------------------------------------------------------------------
+# Mints short-lived, per-run credentials for the CI workflows via OIDC. Trust
+# is anchored to THIS repo (+ branches/events), so the pipeline is team-usable
+# with nothing to rotate. Push role scoped to the vllm-cpu ECR repo ARN.
+module "github_oidc" {
+  source = "../../modules/github-oidc"
+
+  name_prefix        = local.name_prefix
+  github_org         = var.github_org
+  github_repo        = var.github_repo
+  github_org_id      = var.github_org_id
+  github_repo_id     = var.github_repo_id
+  ecr_repository_arn = module.ecr.repository_arns["vllm-cpu"]
+}

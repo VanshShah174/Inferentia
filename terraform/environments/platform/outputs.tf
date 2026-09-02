@@ -44,3 +44,13 @@ output "model_loader_role_arn" {
   description = "IAM role ARN mapped to the model-loader ServiceAccount via Pod Identity."
   value       = module.pod_identity.role_arn
 }
+
+output "ci_push_role_arn" {
+  description = "OIDC role ARN for CI build+push. Set as GitHub repo variable AWS_CI_PUSH_ROLE_ARN."
+  value       = module.github_oidc.push_role_arn
+}
+
+output "ci_verify_role_arn" {
+  description = "OIDC role ARN for CI verify (promotion-gate). Set as GitHub repo variable AWS_CI_VERIFY_ROLE_ARN."
+  value       = module.github_oidc.verify_role_arn
+}

@@ -27,3 +27,14 @@ model_bucket_force_destroy = true
 
 inference_namespaces  = ["inference-dev", "inference-qa", "inference-ppd", "inference-prod"]
 model_service_account = "vllm-model-loader"
+
+# -- GitHub OIDC (keyless CI -> ECR). No secrets here — just identifiers used
+# to build the trust policy. github_org_id/github_repo_id are needed ONLY if
+# the repo was created on/after 2026-07-15 (new immutable-ID OIDC sub format);
+# otherwise leave them unset. Get them with:
+#   gh api users/VanshShah174 --jq .id            # github_org_id
+#   gh api repos/VanshShah174/Inferentia --jq .id # github_repo_id
+github_org  = "VanshShah174"
+github_repo = "Inferentia"
+# github_org_id  = "123456"
+# github_repo_id = "789012"

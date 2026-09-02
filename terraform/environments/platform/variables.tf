@@ -91,3 +91,28 @@ variable "model_service_account" {
   type        = string
   default     = "vllm-model-loader"
 }
+
+# -- GitHub OIDC (keyless CI -> ECR) ------------------------------------------
+variable "github_org" {
+  description = "GitHub org/owner that hosts the repo (for the OIDC trust policy)."
+  type        = string
+  default     = "VanshShah174"
+}
+
+variable "github_repo" {
+  description = "GitHub repository name (for the OIDC trust policy)."
+  type        = string
+  default     = "Inferentia"
+}
+
+variable "github_org_id" {
+  description = "Numeric GitHub org/owner ID. Needed only for repos created on/after 2026-07-15 (new immutable-ID OIDC sub format). Null = match classic sub format only. Find it: `gh api users/VanshShah174 --jq .id`."
+  type        = string
+  default     = null
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub repository ID (pairs with github_org_id). Find it: `gh api repos/VanshShah174/Inferentia --jq .id`."
+  type        = string
+  default     = null
+}
