@@ -34,24 +34,36 @@ spec:
   generators:
     - list:
         elements:
+          # imageTag is DEPLOYMENT-specific, not chart-specific: it names the
+          # exact artifact each env runs, so it lives here (the deployer), not
+          # in the chart. dev/qa run the unsigned seed (0.1.0) — signature is
+          # not enforced there. ppd/prod MUST run the CI-signed image, so their
+          # imageTag is the signed commit SHA (Cosign-signed by sign-and-publish;
+          # Kyverno verify-image-signatures enforces it at admission). Bump the
+          # ppd/prod imageTag to each new signed SHA after promotion. (Production
+          # evolution: ArgoCD Image Updater would watch ECR and auto-bump this.)
           - env: dev
             branch: dev
             valuesFile: values.yaml
+            imageTag: "0.1.0"
             ecrRepo: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/inferentia/vllm-cpu"
             s3Bucket: "inferentia-model-store-${AWS_ACCOUNT_ID}"
           - env: qa
             branch: qa
             valuesFile: values-qa.yaml
+            imageTag: "0.1.0"
             ecrRepo: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/inferentia/vllm-cpu"
             s3Bucket: "inferentia-model-store-${AWS_ACCOUNT_ID}"
           - env: ppd
             branch: ppd
             valuesFile: values-ppd.yaml
+            imageTag: "3e0ac6683ac3f21427a9c09b9a6b194b376edc7a"
             ecrRepo: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/inferentia/vllm-cpu"
             s3Bucket: "inferentia-model-store-${AWS_ACCOUNT_ID}"
           - env: prod
             branch: main
             valuesFile: values-prod.yaml
+            imageTag: "3e0ac6683ac3f21427a9c09b9a6b194b376edc7a"
             ecrRepo: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/inferentia/vllm-cpu"
             s3Bucket: "inferentia-model-store-${AWS_ACCOUNT_ID}"
 
@@ -78,6 +90,8 @@ spec:
           parameters:
             - name: image.repository
               value: '{{.ecrRepo}}'
+            - name: image.tag
+              value: '{{.imageTag}}'
             - name: model.s3Bucket
               value: '{{.s3Bucket}}'
 
