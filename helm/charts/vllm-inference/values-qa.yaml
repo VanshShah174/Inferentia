@@ -43,12 +43,17 @@ serving:
     TOKENIZERS_PARALLELISM: "false"
 
 # -- Resources (between dev and prod)
+# NOTE: a t3.large has only 2 vCPU (~1.93 allocatable after system reservation),
+# so a cpu REQUEST of 2 can never schedule on this instance type — the pod sits
+# Pending forever ("Insufficient cpu"). Right-sized to fit the demo node group
+# while staying a step above dev (dev requests 750m). The limit still allows
+# bursting to most of a node for throughput.
 resources:
   requests:
-    cpu: "2"
+    cpu: "750m"
     memory: "4Gi"
   limits:
-    cpu: "4"
+    cpu: "3"
     memory: "8Gi"
 
 # -- Persistent Volume
