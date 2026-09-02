@@ -22,18 +22,25 @@ serviceAccount:
   name: "vllm-model-loader"
 
 # -- Model Configuration
+# BASE = dev-on-EKS. dev pulls the same S3-seeded artifact as the other
+# environments (source: s3) so it faithfully rehearses the Pod-Identity -> S3
+# -> PVC path. (Local/kind runs use values-kind.yaml with source: huggingface.)
 model:
   name: "Qwen/Qwen2.5-0.5B-Instruct"
   revision: "main"
-  # Source for model download job (s3:// or huggingface)
-  source: "huggingface"
-  # S3 bucket (used when source: s3)
-  s3Bucket: ""
-  s3Key: ""
+  # Source for model download job (s3 or huggingface)
+  source: "s3"
+  # S3 bucket + key (seeded once via scripts/seed-model.sh). <AWS_ACCOUNT_ID>
+  # is filled from Terraform output at deploy time.
+  s3Bucket: "inferentia-model-store-<AWS_ACCOUNT_ID>"
+  s3Key: "Qwen2.5-0.5B-Instruct/"
 
 # -- Container Image
+# dev pulls the UNSIGNED image from ECR (seeded once via scripts/seed-ecr.sh,
+# then replaced by CI at the first PR dev->qa). Kyverno does NOT require a
+# signature in dev (signing starts at ppd), so an unsigned image is valid here.
 image:
-  repository: inferentia/vllm-cpu
+  repository: <AWS_ACCOUNT_ID>.dkr.ecr.ca-central-1.amazonaws.com/inferentia/vllm-cpu
   tag: "0.1.0"
   pullPolicy: IfNotPresent
 

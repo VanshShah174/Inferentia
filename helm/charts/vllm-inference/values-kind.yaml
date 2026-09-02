@@ -1,0 +1,101 @@
+# =============================================================================
+# values-kind.yaml — LOCAL kind overrides (NOT an EKS environment)
+# =============================================================================
+# The base values.yaml is now dev-on-EKS (ECR image + S3 model source). This
+# overlay makes the SAME chart run on a laptop kind cluster instead: local
+# image, HuggingFace model download, no Prometheus Operator, no Pod Identity.
+#
+# Install:
+#   helm install vllm ./helm/charts/vllm-inference \
+#     -f helm/charts/vllm-inference/values-kind.yaml -n inference
+#
+# Battle-tested during Stage 1a (proven to serve Qwen 0.5B on kind after the
+# 6-bug debugging round). Keep these settings — they are hard-won.
+# =============================================================================
+
+# Local namespace (kind has no inference-<env> namespaces).
+namespace: inference
+
+# -- Override BACK to the local image + HuggingFace source (base is ECR + s3).
+image:
+  repository: inferentia/vllm-cpu # bare local name (loaded via `kind load`)
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent # never try to pull; image is preloaded into kind
+
+model:
+  name: "Qwen/Qwen2.5-0.5B-Instruct"
+  revision: "main"
+  source: "huggingface" # no S3/AWS locally
+  s3Bucket: ""
+  s3Key: ""
+
+# No Pod Identity locally -> the model-download Job just uses the default SA
+# (the HuggingFace path needs no AWS credentials).
+serviceAccount:
+  create: false
+  name: "default"
+
+# No Prometheus Operator on kind -> skip the ServiceMonitor entirely
+# (otherwise install fails: "no matches for kind ServiceMonitor").
+serviceMonitor:
+  enabled: false
+
+# Single replica for the KV-cache / vLLM study; small context to fit the laptop.
+serving:
+  replicas: 1
+  maxModelLen: 256
+  enforceEager: true
+  # env REPLACES the chart default map (Helm doesn't deep-merge) -> list all.
+  env:
+    # Must be an INTEGER (GiB). 0.5 fails: "invalid literal for int()".
+    VLLM_CPU_KVCACHE_SPACE: "1"
+    VLLM_TARGET_DEVICE: "cpu"
+    TOKENIZERS_PARALLELISM: "false"
+  extraArgs: [] # --enforce-eager already disables torch.compile on v0.28
+
+# Fits a ~11.68GiB kind node (Docker Desktop raised to ~11.4GB).
+resources:
+  requests:
+    cpu: "1"
+    memory: "2Gi"
+  limits:
+    cpu: "4"
+    memory: "6Gi"
+
+# 256Mi was too small -> shm-broadcast timed out during warmup. 1Gi is safe.
+shmSize: 1Gi
+
+modelDownloader:
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# CPU startup is SLOW (~175s engine warmup). Generous probe delays so the
+# kubelet doesn't kill the pod mid-startup. (EKS/GPU keeps tighter defaults.)
+probes:
+  readiness:
+    path: /health
+    port: 8000
+    initialDelaySeconds: 60
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 40 # 60s + 40*15s ~= 11min grace
+  liveness:
+    path: /health
+    port: 8000
+    initialDelaySeconds: 600 # don't probe liveness until 10min in
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 10
+
+# kind default StorageClass ("standard" / local-path).
+persistence:
+  storageClass: ""
+  size: 5Gi
+
+autoscaling:
+  enabled: false
