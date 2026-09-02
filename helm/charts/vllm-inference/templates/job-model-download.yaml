@@ -15,17 +15,17 @@ metadata:
     {{- include "vllm-inference.labels" . | nindent 4 }}
     app.kubernetes.io/component: model-downloader
   annotations:
-    # NORMAL resource (NOT a Helm hook), ordered AFTER the PVC via ArgoCD
-    # sync-wave. Its pod is the first consumer of the WaitForFirstConsumer PVC,
-    # which triggers binding. The vLLM Deployment's `wait-for-model` init
-    # container then blocks until this Job has populated the model, so exact
-    # Job-vs-Deployment ordering is not required.
+    # NORMAL resource (NOT a Helm hook). SAME sync-wave as the PVC (0) so the
+    # Job's pod is created alongside the PVC and becomes its first consumer,
+    # triggering WaitForFirstConsumer binding. It must NOT be in a LATER wave
+    # than the PVC/Deployment: ArgoCD waits for a wave to be Healthy before the
+    # next, and the PVC (Pending) + Deployment (waiting on the model) never go
+    # Healthy until this Job runs — a later-wave Job would deadlock. The
+    # Deployment's `wait-for-model` init container enforces model-ready ordering.
     #
     # WHY NOT A HOOK: as a pre-install/PreSync hook it ran before the PVC (now a
     # normal resource) existed under ArgoCD, and hook PVCs deadlock (see pvc.yaml).
-    # helm.sh/hook-delete-policy is dropped so the Job is a managed resource
-    # ArgoCD prunes normally.
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "0"
     # Let ArgoCD replace the immutable Job on re-sync instead of erroring on
     # spec changes (Jobs are largely immutable once created).
     argocd.argoproj.io/sync-options: Replace=true

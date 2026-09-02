@@ -29,6 +29,12 @@ metadata:
   labels:
     {{- include "vllm-inference.labels" . | nindent 4 }}
     app.kubernetes.io/component: inference
+  annotations:
+    # Later sync-wave than the PVC + model-download Job (wave 0): ArgoCD waits
+    # for wave 0 to be Healthy (PVC Bound, Job Complete) before creating the
+    # Deployment. Combined with the wait-for-model init container, this makes
+    # startup deterministic: model is on the PVC before vLLM boots.
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   replicas: {{ .Values.serving.replicas }}
   selector:
