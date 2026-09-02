@@ -77,7 +77,7 @@ jobs:
       # Trivy — CVE scan of the built image. Fails on CRITICAL/HIGH.
       # -----------------------------------------------------------------------
       - name: Trivy image scan (CRITICAL, HIGH)
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           format: table
@@ -89,7 +89,7 @@ jobs:
       # Also emit SARIF so findings show in the GitHub Security tab.
       - name: Trivy image scan (SARIF report)
         if: always()
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           format: sarif
