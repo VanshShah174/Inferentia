@@ -79,6 +79,11 @@ spec:
               echo "Installing awscli (user site)..."
               pip install --user --no-cache-dir --disable-pip-version-check awscli
 
+              # pip --user installs the `aws` entrypoint into $HOME/.local/bin
+              # ($HOME=/tmp here), which is NOT on PATH -> "aws: not found".
+              # Put it on PATH before use.
+              export PATH="$HOME/.local/bin:$PATH"
+
               echo "Syncing model from s3://{{ .Values.model.s3Bucket }}/{{ .Values.model.s3Key }} ..."
               aws s3 sync "s3://{{ .Values.model.s3Bucket }}/{{ .Values.model.s3Key }}" "$MODEL_DIR"
               {{- else }}
