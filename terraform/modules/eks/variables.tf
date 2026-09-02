@@ -46,3 +46,15 @@ variable "pod_identity_agent_version" {
   type        = string
   default     = null
 }
+
+variable "vpc_cni_version" {
+  description = "Version of the vpc-cni addon. Null = let the data source pick the default compatible version for the cluster K8s version."
+  type        = string
+  default     = null
+}
+
+variable "enable_network_policy" {
+  description = "Enable Kubernetes NetworkPolicy enforcement via the VPC CNI network-policy feature. Required for the chart's NetworkPolicies to actually be enforced (the CNI drops disallowed traffic). Managing the vpc-cni addon in Terraform is what lets us set this."
+  type        = bool
+  default     = true
+}

@@ -115,6 +115,46 @@ resource "aws_eks_node_group" "this" {
 }
 
 # -----------------------------------------------------------------------------
+# VPC CNI addon — MANAGED so we can enable NetworkPolicy enforcement
+# -----------------------------------------------------------------------------
+# The VPC CNI ships pre-installed on EKS, but UNMANAGED it enforces no
+# NetworkPolicy — meaning the chart's default-deny/allow policies would be
+# accepted by the API server yet silently ignored (any pod could still reach
+# vLLM:8000). Bringing the addon under Terraform lets us flip on the built-in
+# network-policy agent via configuration_values, so the policies are actually
+# enforced (disallowed packets dropped at the node). This is the CNI-side half
+# of the NetworkPolicy story; the chart is the K8s-object half.
+#
+# We deliberately do NOT set service_account_role_arn here: the node group's
+# instance role already carries AmazonEKS_CNI_Policy, so the addon keeps
+# working with node-role creds (no Pod Identity needed for the CNI itself).
+data "aws_eks_addon_version" "vpc_cni" {
+  addon_name         = "vpc-cni"
+  kubernetes_version = aws_eks_cluster.this.version
+  most_recent        = true
+}
+
+resource "aws_eks_addon" "vpc_cni" {
+  cluster_name  = aws_eks_cluster.this.name
+  addon_name    = "vpc-cni"
+  addon_version = coalesce(var.vpc_cni_version, data.aws_eks_addon_version.vpc_cni.version)
+
+  # AWS-documented key to turn on the network-policy agent. jsonencode keeps
+  # the payload valid regardless of the bool. When false, policies remain
+  # inert (accepted but unenforced) — the toggle mirrors values networkPolicy.
+  configuration_values = jsonencode({
+    enableNetworkPolicy = var.enable_network_policy ? "true" : "false"
+  })
+
+  # PRESERVE: don't clobber any in-cluster CNI config the addon adopts when it
+  # takes over the pre-installed self-managed CNI.
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "PRESERVE"
+
+  depends_on = [aws_eks_node_group.this]
+}
+
+# -----------------------------------------------------------------------------
 # EKS Pod Identity Agent addon — enables Pod Identity (NOT IRSA)
 # -----------------------------------------------------------------------------
 # This DaemonSet is what lets pods receive IAM creds via Pod Identity
