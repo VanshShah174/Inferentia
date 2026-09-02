@@ -1,0 +1,38 @@
+# =============================================================================
+# gp3 StorageClass — dynamic EBS provisioning for model-weights PVCs
+# =============================================================================
+# Per ADR-010: cluster-level K8s resource, applied via kubectl (not Terraform).
+# The EBS CSI addon (provisioner ebs.csi.aws.com) provisions the underlying
+# volume; this StorageClass tells it HOW (gp3, expandable, bind-on-schedule).
+#
+# WHY gp3 (not the built-in gp2 default):
+#   - gp3 is ~20% cheaper per GiB and decouples IOPS/throughput from size.
+#   - The chart values (values-qa/ppd/prod.yaml) explicitly request
+#     storageClass: "gp3"; dev (values.yaml) uses "" = the cluster DEFAULT.
+#     Making gp3 the default satisfies BOTH: named "gp3" and the empty default.
+#
+# WHY WaitForFirstConsumer:
+#   The volume is created in the SAME AZ as the pod that first mounts it,
+#   avoiding "pod in AZ-a, volume in AZ-b, cannot attach" scheduling failures.
+#
+# Apply once after the cluster + EBS CSI addon are up:
+#   kubectl apply -f manifests/bootstrap/storageclass-gp3.yaml
+#
+# NOTE: this also marks gp3 as the DEFAULT and unsets gp2 as default, so a PVC
+# with no storageClassName lands on gp3.
+# =============================================================================
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  labels:
+    app.kubernetes.io/part-of: inferentia
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete
