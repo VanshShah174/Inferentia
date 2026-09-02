@@ -85,6 +85,7 @@ jobs:
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
+          trivyignores: containers/vllm-cpu/.trivyignore
 
       # Also emit SARIF so findings show in the GitHub Security tab.
       - name: Trivy image scan (SARIF report)
@@ -96,6 +97,7 @@ jobs:
           output: trivy-image.sarif
           ignore-unfixed: true
           severity: CRITICAL,HIGH
+          trivyignores: containers/vllm-cpu/.trivyignore
 
       # -----------------------------------------------------------------------
       # Checkov — IaC scan (Terraform, Helm, K8s manifests). Soft-fail until

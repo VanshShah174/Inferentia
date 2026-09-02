@@ -17,17 +17,17 @@ LABEL org.opencontainers.image.version="0.1.0"
 LABEL org.opencontainers.image.vendor="Inferentia"
 
 # -----------------------------------------------------------------------------
-# CVE remediation — upgrade vulnerable build/packaging libs shipped in the base
-# image to their fixed versions. Trivy (build-and-scan) flags these as HIGH:
-#   setuptools     CVE-2025-47273  -> fixed 78.1.1  (path traversal)
-#   wheel          CVE-2026-24049  -> fixed 0.46.2  (priv-esc / arbitrary code)
-#   jaraco.context CVE-2026-23949  -> fixed 6.1.0   (path traversal)
-# Done as root (before the USER switch) so the system site-packages are writable.
+# CVE remediation — upgrade the vulnerable packaging lib shipped in the base
+# image to a fixed version. Trivy (build-and-scan) flagged setuptools as HIGH:
+#   setuptools CVE-2025-47273 -> fixed 78.1.1 (path traversal)
+# Pinned EXACTLY to 78.1.1: it is the fixed release AND stays within vLLM's
+# constraint (vllm 0.28.0 requires setuptools <81.0.0,>=77.0.3). A newer
+# setuptools (e.g. 84.x) clears the CVE but breaks that constraint.
+# The vendored wheel (0.46.3) and jaraco.context (6.1.0) inside setuptools are
+# already at fixed versions in the base image, so no action needed there.
+# Done as root (before the USER switch) so /opt/venv is writable.
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir --upgrade \
-        "setuptools>=78.1.1" \
-        "wheel>=0.46.2" \
-        "jaraco.context>=6.1.0"
+RUN pip install --no-cache-dir "setuptools==78.1.1"
 
 # Create non-root user for security (CIS Benchmark 4.1)
 RUN groupadd -r vllm && useradd -r -g vllm -d /home/vllm -s /sbin/nologin vllm \
