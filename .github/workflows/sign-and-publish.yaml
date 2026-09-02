@@ -79,12 +79,29 @@ jobs:
         id: ref
         run: |
           if [ "${{ vars.REGISTRY_ENABLED }}" = "true" ]; then
-            # imageDigest for the tag pushed by build-and-scan (this PR's SHA).
-            DIGEST=$(aws ecr describe-images \
-              --repository-name inferentia/vllm-cpu \
-              --image-ids imageTag=${{ github.sha }} \
-              --region "${AWS_REGION}" \
-              --query 'imageDetails[0].imageDigest' --output text)
+            # build-and-scan and sign-and-publish both trigger on the SAME
+            # pull_request event and run IN PARALLEL — there is no ordering
+            # guarantee, so the image for this SHA may not be in ECR yet when
+            # we look. Poll for the tag (up to ~10 min) instead of failing on
+            # the first miss (which was an ImageNotFoundException race).
+            DIGEST=""
+            for attempt in $(seq 1 40); do
+              DIGEST=$(aws ecr describe-images \
+                --repository-name inferentia/vllm-cpu \
+                --image-ids imageTag=${{ github.sha }} \
+                --region "${AWS_REGION}" \
+                --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)
+              if [ -n "${DIGEST}" ] && [ "${DIGEST}" != "None" ]; then
+                echo "Image tag ${{ github.sha }} present after attempt ${attempt}."
+                break
+              fi
+              echo "Attempt ${attempt}: image not in ECR yet (build-and-scan still pushing); retrying in 15s..."
+              sleep 15
+            done
+            if [ -z "${DIGEST}" ] || [ "${DIGEST}" = "None" ]; then
+              echo "::error::Image tag ${{ github.sha }} never appeared in ECR — build-and-scan may have failed."
+              exit 1
+            fi
             REF="${{ env.IMAGE_NAME }}@${DIGEST}"
           else
             REF="${{ env.IMAGE_NAME }}:${{ github.sha }}"
