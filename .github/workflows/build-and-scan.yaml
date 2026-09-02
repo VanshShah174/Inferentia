@@ -110,8 +110,13 @@ jobs:
           quiet: true
           soft_fail: true
           framework: terraform,helm,kubernetes,dockerfile
-          output_format: cli,sarif
-          output_file_path: console,checkov.sarif
+          # output_format must be a SINGLE value. This checkov version's -o
+          # rejects a comma-joined value (e.g. "cli,sarif") — an argparse
+          # crash BEFORE scanning that soft_fail cannot suppress. sarif alone
+          # feeds the GitHub Security tab; console findings stay in the job log.
+          # (The action has no output_file_path input — it writes results.sarif
+          # itself; the scan-reports upload is best-effort with warn-if-missing.)
+          output_format: sarif
 
       # -----------------------------------------------------------------------
       # Syft — generate an SBOM (SPDX JSON) for the exact image we built.
