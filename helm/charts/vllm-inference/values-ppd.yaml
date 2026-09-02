@@ -41,14 +41,20 @@ serving:
     VLLM_TARGET_DEVICE: "cpu"
     TOKENIZERS_PARALLELISM: "false"
 
-# -- Resources (prod-sized)
+# -- Resources
+# NOTE: prod-intent sizing is cpu req 4 / limit 8, but the demo node group is
+# t3.large (2 vCPU, ~1.93 allocatable). With replicas: 2 that would need 8 vCPU
+# of requests and NEITHER pod could schedule ("Insufficient cpu"). Right-sized
+# to 750m request / 3 limit so both replicas fit across the 2-node group while
+# still exercising multi-replica + autoscaling. On a larger prod node group,
+# restore cpu req 4 / limit 8.
 resources:
   requests:
-    cpu: "4"
-    memory: "8Gi"
+    cpu: "750m"
+    memory: "4Gi"
   limits:
-    cpu: "8"
-    memory: "16Gi"
+    cpu: "3"
+    memory: "8Gi"
 
 # -- Persistent Volume
 persistence:
