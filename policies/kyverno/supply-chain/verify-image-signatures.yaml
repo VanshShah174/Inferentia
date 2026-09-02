@@ -39,9 +39,16 @@ spec:
           - resources:
               kinds:
                 - Pod
+              # SCOPE: ppd + prod ONLY. Signing happens at the PR->ppd stage
+              # (sign-and-publish.yaml) — so the signed image first EXISTS at
+              # ppd. dev and qa run the same image UNSIGNED (dev = seeded/local,
+              # qa = built by build-and-scan but not yet signed). Enforcing a
+              # signature there would apply the strictest supply-chain gate to
+              # the loosest environments, inverting the progressive-security
+              # model. Signature enforcement therefore begins where signing
+              # begins: ppd. (Pod-security + resource-hygiene policies still
+              # cover dev + qa — only the SIGNATURE requirement is scoped here.)
               namespaces:
-                - inference-dev
-                - inference-qa
                 - inference-ppd
                 - inference-prod
       verifyImages:
