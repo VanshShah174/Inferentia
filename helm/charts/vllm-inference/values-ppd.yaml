@@ -37,7 +37,12 @@ serving:
   enforceEager: true
   port: 8000
   env:
-    VLLM_CPU_KVCACHE_SPACE: "4"
+    # KV-cache reservation must fit within the container memory limit AFTER the
+    # model + runtime overhead. With an 8Gi limit, ~3.5Gi is free after load, so
+    # a 4Gi KV reservation fails engine init ("Available memory ... less than
+    # requested memory for kv (4.0 GiB)"). 2Gi fits with headroom (matches qa).
+    # On a larger-memory prod node, raise this back toward 4.
+    VLLM_CPU_KVCACHE_SPACE: "2"
     VLLM_TARGET_DEVICE: "cpu"
     TOKENIZERS_PARALLELISM: "false"
 
