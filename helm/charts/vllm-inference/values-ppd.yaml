@@ -30,8 +30,13 @@ model:
   s3Key: "Qwen2.5-0.5B-Instruct/"
 
 # -- vLLM Serving (prod-like)
+# replicas: 1 for the demo node group. Prod intent is 2 (and autoscaling below
+# keeps min 2), but the 3-node t3.large cluster already runs dev + qa + system
+# pods, leaving room for ~1 more vLLM pod. A 2nd replica sits Pending forever
+# ("Insufficient cpu"), holding the app at Progressing. One replica proves the
+# signed-image admission + serving; restore 2 on a larger prod cluster.
 serving:
-  replicas: 2
+  replicas: 1
   dtype: "bfloat16"
   maxModelLen: 2048
   enforceEager: true
@@ -70,22 +75,27 @@ persistence:
 
 shmSize: 2Gi
 
-# -- Autoscaling ON (rehearse prod scaling), lower ceiling than prod for cost
+# -- Autoscaling ON (rehearse prod scaling), lower ceiling than prod for cost.
+# minReplicas 1 for the demo (cluster fits ~1 vLLM pod); prod intent is min 2.
+# The KEDA/HPA mechanism is still exercised — it just won't scale past what the
+# demo node group can hold.
 autoscaling:
   enabled: true
-  minReplicas: 2
+  minReplicas: 1
   maxReplicas: 6
   targetKVCacheUtilization: 70
 
-# -- Node placement (mirror prod)
-nodeSelector:
-  node-role: inference
+# -- Node placement
+# Prod intent is dedicated inference nodes (nodeSelector node-role=inference +
+# a matching taint/toleration). The demo node group is a single unlabeled,
+# untainted t3.large pool, so pinning to node-role=inference leaves pods
+# Pending ("didn't match node affinity/selector"). Left empty for the demo;
+# on a prod cluster with a labeled+tainted inference pool, restore:
+#   nodeSelector: { node-role: inference }
+#   tolerations: [{ key: workload, operator: Equal, value: inference, effect: NoSchedule }]
+nodeSelector: {}
 
-tolerations:
-  - key: "workload"
-    operator: "Equal"
-    value: "inference"
-    effect: "NoSchedule"
+tolerations: []
 
 affinity:
   podAntiAffinity:
