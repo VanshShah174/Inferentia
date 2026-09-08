@@ -26,7 +26,7 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: vllm-prod-vllm-inference # release vllm-prod + chart vllm-inference
-  minReplicaCount: 1 # demo node group: idle at 1, scale up on KV-cache pressure
+  minReplicaCount: 2 # llm-d routing needs >=2 pods to route between; hold at 2
   maxReplicaCount: 3 # bounded for the demo cluster's capacity
   cooldownPeriod: 60 # shorter for the demo so scale-down is observable
   pollingInterval: 15 # query Prometheus every 15s
