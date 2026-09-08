@@ -70,9 +70,13 @@ persistence:
 # -- Shared Memory
 shmSize: 2Gi
 
-# -- Autoscaling (enabled in production)
+# -- Autoscaling: KEDA owns prod scaling (ScaledObject on KV-cache), NOT the
+# chart's CPU HPA. Two autoscalers on one Deployment conflict (KEDA's admission
+# webhook rejects a ScaledObject whose target already has an HPA). So the chart
+# HPA is DISABLED here; scaling is driven by helm/charts/observability/
+# keda-scaledobject.yaml (Prometheus vllm:kv_cache_usage_perc trigger).
 autoscaling:
-  enabled: true
+  enabled: false
   minReplicas: 1
   maxReplicas: 10
   targetKVCacheUtilization: 70
