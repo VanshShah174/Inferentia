@@ -35,25 +35,30 @@ model:
   s3Key: "Qwen2.5-0.5B-Instruct/"
 
 # -- vLLM Serving Configuration (production tuned)
+# Demo-cluster sizing: prod intent is replicas 2 + cpu req 4, but the demo runs
+# on a shared 3-node t3.large group (2 vCPU each) already hosting dev+qa+ppd.
+# replicas: 1 proves the signed-artifact promotion; KVCACHE 2 fits the 8Gi
+# limit (4Gi failed engine init). Restore replicas 2 / cpu 4 / KVCACHE 4 on a
+# real prod node group.
 serving:
-  replicas: 2
+  replicas: 1
   dtype: "bfloat16"
   maxModelLen: 2048
   enforceEager: true
   port: 8000
   env:
-    VLLM_CPU_KVCACHE_SPACE: "4"
+    VLLM_CPU_KVCACHE_SPACE: "2"
     VLLM_TARGET_DEVICE: "cpu"
     TOKENIZERS_PARALLELISM: "false"
 
-# -- Resource Requests and Limits (production sized nodes)
+# -- Resource Requests and Limits (right-sized for the demo node group)
 resources:
   requests:
-    cpu: "4"
-    memory: "8Gi"
+    cpu: "750m"
+    memory: "4Gi"
   limits:
-    cpu: "8"
-    memory: "16Gi"
+    cpu: "3"
+    memory: "8Gi"
 
 # -- Persistent Volume (larger for production models)
 persistence:
@@ -68,20 +73,18 @@ shmSize: 2Gi
 # -- Autoscaling (enabled in production)
 autoscaling:
   enabled: true
-  minReplicas: 2
+  minReplicas: 1
   maxReplicas: 10
   targetKVCacheUtilization: 70
 
-# -- Node Selector (target inference node group)
-nodeSelector:
-  node-role: inference
+# -- Node placement
+# Prod intent is dedicated inference nodes (nodeSelector node-role=inference +
+# matching taint/toleration). The demo node group is unlabeled/untainted, so
+# pinning leaves pods Pending ("didn't match node affinity/selector"). Empty
+# for the demo; restore on a labeled+tainted prod inference pool.
+nodeSelector: {}
 
-# -- Tolerations (inference nodes may have taints)
-tolerations:
-  - key: "workload"
-    operator: "Equal"
-    value: "inference"
-    effect: "NoSchedule"
+tolerations: []
 
 # -- Affinity (spread pods across AZs)
 affinity:
