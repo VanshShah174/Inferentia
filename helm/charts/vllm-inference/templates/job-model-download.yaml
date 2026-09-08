@@ -26,9 +26,13 @@ metadata:
     # WHY NOT A HOOK: as a pre-install/PreSync hook it ran before the PVC (now a
     # normal resource) existed under ArgoCD, and hook PVCs deadlock (see pvc.yaml).
     argocd.argoproj.io/sync-wave: "0"
-    # Let ArgoCD replace the immutable Job on re-sync instead of erroring on
-    # spec changes (Jobs are largely immutable once created).
-    argocd.argoproj.io/sync-options: Replace=true
+    # A Job's spec.selector/template are IMMUTABLE once created, so a plain
+    # Replace=true (kubectl replace) errors "field is immutable" and WEDGES the
+    # whole sync — blocking the wave-1 Deployment from ever being applied.
+    # Force=true makes ArgoCD delete-then-recreate the Job instead of replacing
+    # it in place, which sidesteps the immutability error. Combined with the
+    # idempotent "skip if model exists" guard, recreating the Job is safe.
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
 spec:
   backoffLimit: 3
   ttlSecondsAfterFinished: 300
