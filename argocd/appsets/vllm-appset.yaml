@@ -57,13 +57,13 @@ spec:
           - env: ppd
             branch: ppd
             valuesFile: values-ppd.yaml
-            imageTag: "3e0ac6683ac3f21427a9c09b9a6b194b376edc7a"
+            imageTag: "8548cf5bafe8b43eadcdabe0f3b503957dd6235d"
             ecrRepo: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/inferentia/vllm-cpu"
             s3Bucket: "inferentia-model-store-${AWS_ACCOUNT_ID}"
           - env: prod
             branch: main
             valuesFile: values-prod.yaml
-            imageTag: "3e0ac6683ac3f21427a9c09b9a6b194b376edc7a"
+            imageTag: "8548cf5bafe8b43eadcdabe0f3b503957dd6235d"
             ecrRepo: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/inferentia/vllm-cpu"
             s3Bucket: "inferentia-model-store-${AWS_ACCOUNT_ID}"
 
