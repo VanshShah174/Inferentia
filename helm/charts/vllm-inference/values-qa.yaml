@@ -1,0 +1,76 @@
+# =============================================================================
+# vllm-inference — QA Values Override
+# =============================================================================
+# Applied via ArgoCD ApplicationSet (qa app, tracks the `qa` branch) or:
+#   helm install -f values.yaml -f values-qa.yaml
+#
+# QA sits between dev and prod: it uses the SAME S3 model source and ECR image
+# as prod (so QA truly validates the promotion path), but stays small and
+# WITHOUT autoscaling (QA is for functional validation, not load).
+#
+# Progressive sizing: dev(1, HF, local img) < QA(1, s3, ECR) < ppd < prod.
+# =============================================================================
+
+# -- Namespace
+namespace: inference-qa
+
+# -- Container Image (from ECR, signed by CI). repository INJECTED by the
+# ArgoCD ApplicationSet (helm.parameters) — empty here, chart stays generic.
+image:
+  repository: ""
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# -- Model Configuration (S3 source — same controlled artifact as prod).
+# s3Bucket INJECTED by the ApplicationSet (helm.parameters model.s3Bucket).
+model:
+  name: "Qwen/Qwen2.5-0.5B-Instruct"
+  revision: "main"
+  source: "s3"
+  s3Bucket: ""
+  s3Key: "Qwen2.5-0.5B-Instruct/"
+
+# -- vLLM Serving (QA: single replica, modest context)
+serving:
+  replicas: 1
+  dtype: "bfloat16"
+  maxModelLen: 1024
+  enforceEager: true
+  port: 8000
+  env:
+    VLLM_CPU_KVCACHE_SPACE: "2"
+    VLLM_TARGET_DEVICE: "cpu"
+    TOKENIZERS_PARALLELISM: "false"
+
+# -- Resources (between dev and prod)
+# NOTE: a t3.large has only 2 vCPU (~1.93 allocatable after system reservation),
+# so a cpu REQUEST of 2 can never schedule on this instance type — the pod sits
+# Pending forever ("Insufficient cpu"). Right-sized to fit the demo node group
+# while staying a step above dev (dev requests 750m). The limit still allows
+# bursting to most of a node for throughput.
+resources:
+  requests:
+    cpu: "750m"
+    memory: "4Gi"
+  limits:
+    cpu: "3"
+    memory: "8Gi"
+
+# -- Persistent Volume
+persistence:
+  enabled: true
+  storageClass: "gp3"
+  size: 10Gi
+  accessMode: ReadWriteOnce
+
+shmSize: 1Gi
+
+# -- Autoscaling OFF in QA (functional validation, not load testing)
+autoscaling:
+  enabled: false
+
+# -- NetworkPolicy: INHERITED from values.yaml (enabled: true, same gateway /
+# prometheus / dns / egress selectors as every EKS env). Not repeated here
+# because it does not differ in QA — the segmentation baseline is identical
+# across dev/qa/ppd/prod. Override here ONLY if QA needs a different network
+# posture (it does not). Local kind disables it in values-kind.yaml.

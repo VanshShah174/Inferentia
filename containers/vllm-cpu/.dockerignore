@@ -1,0 +1,9 @@
+# Don't send these to the Docker build context
+.git
+.env
+*.md
+*.pem
+*.key
+__pycache__
+node_modules
+.terraform

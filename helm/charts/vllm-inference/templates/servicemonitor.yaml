@@ -1,0 +1,33 @@
+{{- if .Values.serviceMonitor.enabled }}
+# =============================================================================
+# ServiceMonitor — Prometheus Scraping Configuration
+# =============================================================================
+# Tells Prometheus Operator to scrape vLLM's /metrics endpoint.
+# vLLM exposes inference-specific metrics:
+#   - vllm:time_to_first_token_seconds_bucket (TTFT, histogram)
+#   - vllm:time_per_output_token_seconds_bucket (TPOT, histogram)
+#   - vllm:kv_cache_usage_perc (KV cache utilization, gauge 0-1)
+#   - vllm:num_requests_running / vllm:num_requests_waiting
+#   - vllm:generation_tokens_total / vllm:prompt_tokens_total (rate = tokens/sec)
+# These feed into Grafana dashboards and KEDA autoscaling.
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "vllm-inference.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
+spec:
+  selector:
+    matchLabels:
+      {{- include "vllm-inference.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: {{ .Values.serviceMonitor.path }}
+      interval: {{ .Values.serviceMonitor.interval }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.namespace }}
+{{- end }}

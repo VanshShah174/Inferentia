@@ -1,0 +1,48 @@
+# =============================================================================
+# Environment namespaces (one per environment, all on the ONE shared cluster)
+# =============================================================================
+# Per ADR-010: Terraform owns AWS resources; Kubernetes resources (namespaces,
+# app deployments) are managed by kubectl/ArgoCD, NOT Terraform. Wrapping a
+# 4-line namespace in its own Terraform state/backend would be overhead for no
+# value.
+#
+# Apply once after the cluster exists:
+#   kubectl apply -f manifests/bootstrap/namespaces.yaml
+#
+# These namespaces are the runtime isolation boundary between environments on
+# the single shared cluster. Their names match:
+#   - the Pod Identity associations in terraform/modules/pod-identity
+#     (namespace + serviceaccount -> IAM role)
+#   - the ArgoCD ApplicationSet targets (one app per namespace)
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: inference-dev
+  labels:
+    app.kubernetes.io/part-of: inferentia
+    inferentia.io/environment: dev
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: inference-qa
+  labels:
+    app.kubernetes.io/part-of: inferentia
+    inferentia.io/environment: qa
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: inference-ppd
+  labels:
+    app.kubernetes.io/part-of: inferentia
+    inferentia.io/environment: ppd
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: inference-prod
+  labels:
+    app.kubernetes.io/part-of: inferentia
+    inferentia.io/environment: prod

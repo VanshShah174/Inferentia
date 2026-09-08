@@ -1,0 +1,39 @@
+# =============================================================================
+# Kyverno ClusterPolicy — cost attribution label
+# =============================================================================
+# Lightweight finops guardrail: every inference pod must carry a cost-center
+# label so spend can be attributed per environment/team in Cost Explorer /
+# tagging reports. Small, but demonstrates cost governance as a first-class
+# concern alongside security and hygiene.
+#
+# (For a single small cluster this is the sensible slice of "cost isolation";
+# heavier controls like per-namespace ResourceQuotas or GPU-pool node
+# constraints aren't warranted at this scale.)
+# =============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: inference-cost-attribution
+  annotations:
+    policies.kyverno.io/title: Require Cost-Center Label
+    policies.kyverno.io/category: Cost Governance
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Requires an inferentia.io/cost-center label on all pods in the inference
+      namespaces so spend can be attributed.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-cost-center-label
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [inference-dev, inference-qa, inference-ppd, inference-prod]
+      validate:
+        message: "Pods must carry an inferentia.io/cost-center label for cost attribution."
+        pattern:
+          metadata:
+            labels:
+              inferentia.io/cost-center: "?*"

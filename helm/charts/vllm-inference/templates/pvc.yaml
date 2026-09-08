@@ -1,0 +1,38 @@
+{{- if .Values.persistence.enabled }}
+# =============================================================================
+# PersistentVolumeClaim — Model Weights Storage
+# =============================================================================
+# This PVC holds the downloaded model weights. The model-download Job writes
+# to it once, then all vLLM pods mount it read-only for fast startup.
+# On EKS: backed by EBS gp3 (or EFS for ReadWriteMany if scaling beyond 1 AZ)
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "vllm-inference.pvcName" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
+  annotations:
+    # NORMAL resource (NOT a Helm hook). Ordering is enforced by the vLLM
+    # Deployment's `wait-for-model` init container, not by hook weights.
+    #
+    # WHY NOT A HOOK: a hook PVC deadlocks under ArgoCD. ArgoCD applies hooks
+    # sequentially and waits for each to become Healthy before the next. But a
+    # WaitForFirstConsumer PVC (gp3) stays Pending until a POD mounts it — and
+    # that pod (the model-download Job) is a later hook ArgoCD won't create
+    # until the PVC hook "completes". Deadlock. As a normal resource the PVC is
+    # applied in the same wave as the Job, whose pod triggers binding.
+    # ArgoCD sync-wave keeps it ahead of the Job for tidy ordering.
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  accessModes:
+    - {{ .Values.persistence.accessMode }}
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+{{- end }}

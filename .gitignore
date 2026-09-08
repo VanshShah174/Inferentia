@@ -5,7 +5,9 @@
 *.tfstate.*
 *.tfstate.backup
 .terraform/
-.terraform.lock.hcl
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored — it pins provider
+# versions + hashes for reproducible init across laptop/CI (supply-chain
+# hygiene, like package-lock.json). Commit it.
 crash.log
 crash.*.log
 override.tf
@@ -70,6 +72,9 @@ Thumbs.db
 *.key
 *secret*
 !*secret*.yaml.example
+# detect-secrets baseline is a manifest of REVIEWED findings, not a secret.
+# It must be committed so CI and the pre-commit hook can diff against it.
+!.secrets.baseline
 credentials.json
 token.json
 
@@ -91,6 +96,16 @@ Chart.lock
 *.sbom.json
 *.sig
 cosign.key
+
+# ============================
+# Archives (avoid committing accidental bundles like .github.zip)
+# ============================
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
 
 # ============================
 # OS

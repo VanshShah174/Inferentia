@@ -7,8 +7,9 @@ rules:
     max: 200
     level: warning
   truthy:
-    forbid-duplicated-merge-keys: true
     check-keys: false
+  key-duplicates:
+    forbid-duplicated-merge-keys: true
   comments:
     min-spaces-from-content: 1
   document-start: disable

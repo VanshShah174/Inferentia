@@ -1,0 +1,30 @@
+# =============================================================================
+# Trivy ignore list — vLLM CPU image
+# =============================================================================
+# Each entry is a HIGH finding that is NOT reachable by the running inference
+# server. They live in build/packaging tooling (setuptools' bundled _vendor
+# dir, or pip's vendored deps) that vLLM never imports at serve time. The
+# active runtime packages are patched (see the Dockerfile CVE-remediation
+# layer: setuptools is pinned to the fixed 78.1.1). We suppress the
+# build-time/vendored copies with justification rather than mutate the
+# internals of setuptools/pip (which risks breaking package tooling) or pull
+# setuptools past vLLM's supported range (<81.0.0).
+#
+# Review cadence: re-evaluate when the vLLM base image is bumped.
+# =============================================================================
+
+# setuptools: active version is 78.1.1 (the fixed release). The flagged 70.3.0
+# is a stale/vendored METADATA copy, not the imported package.
+CVE-2025-47273
+
+# wheel 0.45.1 — bundled inside setuptools/_vendor (build-time only, not a
+# runtime import path for the inference server).
+CVE-2026-24049
+
+# jaraco.context 5.3.0 — bundled inside setuptools/_vendor (build-time only).
+CVE-2026-23949
+
+# msgpack 1.1.2 — vendored inside pip (pip/_vendor). Used only by pip during
+# dependency resolution, never by the running vLLM server. No standalone
+# msgpack is installed; upgrading is not possible without patching pip itself.
+GHSA-6v7p-g79w-8964

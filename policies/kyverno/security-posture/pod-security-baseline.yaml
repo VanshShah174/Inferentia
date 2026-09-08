@@ -1,0 +1,96 @@
+# =============================================================================
+# Kyverno ClusterPolicy — Pod security posture for inference workloads
+# =============================================================================
+# Enforces at ADMISSION the same hardening the Dockerfile + chart already apply
+# (non-root, no privilege escalation, dropped capabilities). Defense in depth:
+# even a misconfigured chart value or a hand-applied pod can't run privileged
+# in the inference namespaces.
+#
+# These mirror the Kubernetes "restricted" Pod Security Standard, scoped to the
+# inference-* namespaces so we don't disrupt system namespaces.
+# =============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: inference-pod-security
+  annotations:
+    policies.kyverno.io/title: Inference Pod Security Posture
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Enforces non-root execution, no privilege escalation, dropped Linux
+      capabilities, and disallows privileged containers for all pods in the
+      inference namespaces.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    # -------------------------------------------------------------------------
+    - name: require-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [inference-dev, inference-qa, inference-ppd, inference-prod]
+      validate:
+        message: "Containers must set securityContext.runAsNonRoot=true."
+        # No =() anchors: the field is REQUIRED, not "validate-if-present".
+        # A pod that omits securityContext entirely is REJECTED (otherwise it
+        # could silently run as the image's default user, possibly root).
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  runAsNonRoot: true
+
+    # -------------------------------------------------------------------------
+    - name: disallow-privilege-escalation
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [inference-dev, inference-qa, inference-ppd, inference-prod]
+      validate:
+        message: "allowPrivilegeEscalation must be false on all containers."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: "false"
+
+    # -------------------------------------------------------------------------
+    - name: disallow-privileged-containers
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [inference-dev, inference-qa, inference-ppd, inference-prod]
+      validate:
+        message: "Privileged containers are not allowed."
+        # deny (not pattern): privileged defaults to false when omitted, so a
+        # pattern requiring privileged:false would wrongly reject pods that
+        # simply don't set it. deny only fires when privileged is explicitly
+        # true — which is what we actually want to block.
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.containers[?securityContext.privileged == `true`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+
+    # -------------------------------------------------------------------------
+    - name: require-drop-all-capabilities
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [inference-dev, inference-qa, inference-ppd, inference-prod]
+      validate:
+        message: "Containers must drop ALL Linux capabilities."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  capabilities:
+                    drop:
+                      - ALL

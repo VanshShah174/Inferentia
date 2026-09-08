@@ -1,0 +1,119 @@
+# =============================================================================
+# CI Status — the single roll-up gate for branch protection
+# =============================================================================
+# Runs on: PR to dev, qa, ppd, main (ALWAYS — no path filters)
+# Purpose: Path filters mean lint/build/sign may or may not trigger on a given
+#          PR. If branch protection required those job names directly, a
+#          docs-only PR (where they are skipped) would either be blocked
+#          forever or merge with NO required check at all.
+#
+#          This workflow always runs and is the ONE check name you mark as
+#          "Required" in branch protection. It waits for the other CI
+#          workflows on this same commit to finish, then passes only if none
+#          of them FAILED. Legitimately-skipped workflows (path filtered out)
+#          are treated as OK.
+#
+# Why not `needs:`? `needs:` only works between jobs in the SAME workflow file.
+# These are separate per-concern workflow files, so we aggregate by querying
+# the check runs for this commit via the GitHub API.
+# =============================================================================
+name: CI status
+
+on:
+  pull_request:
+    branches: [dev, qa, ppd, main]
+
+concurrency:
+  group: ci-status-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: read
+  statuses: read
+
+jobs:
+  gate:
+    name: Roll-up gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate CI workflow results for this commit
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const sha = context.payload.pull_request.head.sha;
+            // The per-concern workflows this gate rolls up. Any that did not
+            // run on this commit (path-filtered) are simply absent, which is OK.
+            const watched = [
+              'Lint & validate',
+              'Build & scan',
+              'Sign & publish',
+              'Promotion gate',
+            ];
+            // This gate's own check name — never wait on ourselves.
+            const selfName = 'CI status';
+
+            const deadlineMs = Date.now() + 20 * 60 * 1000; // 20 min budget
+            const pollMs = 15 * 1000;
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+            // Startup-race guard: ci-status runs IN PARALLEL with the workflows
+            // it watches. If we poll before GitHub has registered their check
+            // runs, we could see zero watched runs and pass falsely. Require a
+            // minimum number of poll cycles (>= 45s) before we trust an empty
+            // result as a real "nothing ran" terminal state.
+            const minPollCycles = 3;
+            let cycles = 0;
+
+            while (true) {
+              cycles++;
+              const { data } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: sha,
+                per_page: 100,
+              });
+
+              // Only consider check runs whose name matches a watched workflow.
+              const runs = data.check_runs.filter(
+                (c) => c.name !== selfName && watched.some((w) => c.name.startsWith(w))
+              );
+
+              const pending = runs.filter((c) => c.status !== 'completed');
+
+              // Don't trust an empty/settled result until we've polled enough
+              // times for sibling check runs to have registered.
+              const settled = pending.length === 0;
+              const emptyButEarly = runs.length === 0 && cycles < minPollCycles;
+
+              if (settled && !emptyButEarly) {
+                const failed = runs.filter(
+                  (c) => !['success', 'skipped', 'neutral'].includes(c.conclusion)
+                );
+                console.log('--- CI roll-up ---');
+                for (const c of runs) {
+                  console.log(`  ${c.name}: ${c.status}/${c.conclusion}`);
+                }
+                if (runs.length === 0) {
+                  console.log('No watched CI workflows ran on this commit (all path-filtered). Passing.');
+                }
+                if (failed.length > 0) {
+                  const names = failed.map((c) => `${c.name} (${c.conclusion})`).join(', ');
+                  core.setFailed(`Required CI checks failed: ${names}`);
+                }
+                return;
+              }
+
+              if (Date.now() > deadlineMs) {
+                const names = pending.map((c) => c.name).join(', ');
+                core.setFailed(`Timed out waiting for CI checks to finish: ${names}`);
+                return;
+              }
+
+              if (emptyButEarly) {
+                console.log(`Poll cycle ${cycles}/${minPollCycles} — waiting for check runs to register`);
+              } else {
+                console.log(`Waiting on ${pending.length} check(s): ${pending.map((c) => c.name).join(', ')}`);
+              }
+              await sleep(pollMs);
+            }

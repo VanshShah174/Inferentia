@@ -1,0 +1,80 @@
+# =============================================================================
+# PrometheusRule — vLLM SLO alerts
+# =============================================================================
+# Prometheus Operator picks this up (ruleSelector is open in our stack values).
+# The alerts carry label app=vllm-inference so Alertmanager routes them to the
+# vllm-webhook receiver (the future Claude enrichment webhook).
+#
+# Thresholds are starting points for a CPU placeholder model — tune per SLO.
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vllm-inference-slo
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: inferentia
+    # This label is what makes kube-prometheus-stack's Prometheus load the rule
+    # when ruleSelector is not restricted (matches our values overlay).
+    release: kube-prom-stack
+spec:
+  groups:
+    - name: vllm-inference.slo
+      rules:
+        # ---------------------------------------------------------------------
+        - alert: VLLMHighTTFTP99
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(vllm:time_to_first_token_seconds_bucket[5m])) by (le, namespace)
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+            app: vllm-inference
+          annotations:
+            summary: "vLLM TTFT p99 is high in {{ $labels.namespace }}"
+            description: >-
+              p99 time-to-first-token has exceeded 2s for 5 minutes. Users are
+              waiting too long for the first token. Likely causes: KV-cache
+              saturation, insufficient replicas, or CPU contention.
+
+        # ---------------------------------------------------------------------
+        - alert: VLLMKVCacheHigh
+          expr: avg(vllm:kv_cache_usage_perc) by (namespace) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+            app: vllm-inference
+          annotations:
+            summary: "vLLM KV cache utilization high in {{ $labels.namespace }}"
+            description: >-
+              KV-cache utilization has been above 90% for 5 minutes. The engine
+              is near capacity; new requests may queue. KEDA should be scaling
+              out — investigate if it isn't.
+
+        # ---------------------------------------------------------------------
+        - alert: VLLMRequestsWaiting
+          expr: sum(vllm:num_requests_waiting) by (namespace) > 5
+          for: 5m
+          labels:
+            severity: warning
+            app: vllm-inference
+          annotations:
+            summary: "vLLM requests are queuing in {{ $labels.namespace }}"
+            description: >-
+              More than 5 requests have been waiting (not running) for 5
+              minutes. The service cannot keep up with demand at current scale.
+
+        # ---------------------------------------------------------------------
+        - alert: VLLMTargetDown
+          expr: up{job=~".*vllm.*"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            app: vllm-inference
+          annotations:
+            summary: "vLLM scrape target down in {{ $labels.namespace }}"
+            description: >-
+              Prometheus cannot scrape a vLLM /metrics endpoint for 2 minutes.
+              The pod may be down, crashing, or the Service/ServiceMonitor is
+              misconfigured.

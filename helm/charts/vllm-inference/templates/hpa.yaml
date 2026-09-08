@@ -1,0 +1,40 @@
+{{- if .Values.autoscaling.enabled }}
+# =============================================================================
+# HorizontalPodAutoscaler — Scaling Stub
+# =============================================================================
+# In production, we use KEDA (ScaledObject) for scaling on vLLM-specific
+# metrics like KV cache utilization from Prometheus. This HPA serves as a
+# fallback/stub that scales on CPU until KEDA is installed.
+#
+# Production path (Phase 7):
+#   KEDA ScaledObject → queries Prometheus → vllm:kv_cache_usage_perc
+#   → scales inference pods based on actual memory pressure
+#
+# This HPA is a simpler alternative that works without KEDA installed.
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "vllm-inference.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "vllm-inference.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    # CPU-based scaling (fallback until KEDA is deployed)
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+    # TODO (Phase 7): Replace with KEDA ScaledObject targeting:
+    #   - vllm:kv_cache_usage_perc > {{ .Values.autoscaling.targetKVCacheUtilization }}
+    #   - vllm:num_requests_waiting > 5
+{{- end }}

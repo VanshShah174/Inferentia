@@ -1,0 +1,213 @@
+# =============================================================================
+# Deployment — vLLM Inference Pods
+# =============================================================================
+# The core workload. Each pod:
+#   1. Init Container: Validates model files exist on PVC before starting
+#   2. Main Container: vLLM serves the model via OpenAI-compatible API
+#
+# Mount strategy:
+#   - PVC (model weights): read-only at /models
+#   - emptyDir (shared memory): mounted at /dev/shm for vLLM IPC
+# =============================================================================
+# GUARD: image.repository is intentionally empty in the values files (it is
+# injected at sync time by the ArgoCD ApplicationSet helm.parameters, so no
+# account id lives in git). Fail LOUDLY here if it was not injected — otherwise
+# the pod would try to pull from an empty/invalid registry ref and fail with a
+# confusing ImagePullBackOff instead of a clear message. (values-kind.yaml sets
+# a real local repository, so kind installs pass this guard.)
+{{- if not .Values.image.repository }}
+{{- fail "image.repository is empty — inject it via the ArgoCD ApplicationSet helm.parameters (image.repository), or set it in values (e.g. values-kind.yaml) for a manual helm install." }}
+{{- end }}
+{{- if and (eq .Values.model.source "s3") (not .Values.model.s3Bucket) }}
+{{- fail "model.source is 's3' but model.s3Bucket is empty — inject it via the ArgoCD ApplicationSet helm.parameters (model.s3Bucket)." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vllm-inference.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "vllm-inference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
+  annotations:
+    # Later sync-wave than the PVC + model-download Job (wave 0): ArgoCD waits
+    # for wave 0 to be Healthy (PVC Bound, Job Complete) before creating the
+    # Deployment. Combined with the wait-for-model init container, this makes
+    # startup deterministic: model is on the PVC before vLLM boots.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  replicas: {{ .Values.serving.replicas }}
+  selector:
+    matchLabels:
+      {{- include "vllm-inference.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vllm-inference.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: inference
+        {{- with .Values.commonLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- end }}
+      # -- Pod Security Context
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+
+      # -- Node placement
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      # =====================================================================
+      # Init Container: Wait for model to be available on PVC
+      # =====================================================================
+      initContainers:
+        - name: wait-for-model
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for model at {{ include "vllm-inference.modelPath" . }}/config.json ..."
+              RETRIES=0
+              MAX_RETRIES=60
+              while [ ! -f "{{ include "vllm-inference.modelPath" . }}/config.json" ]; do
+                RETRIES=$((RETRIES + 1))
+                if [ $RETRIES -ge $MAX_RETRIES ]; then
+                  echo "ERROR: Model not found after $MAX_RETRIES attempts. Exiting."
+                  exit 1
+                fi
+                echo "Attempt $RETRIES/$MAX_RETRIES — model not ready yet, waiting 10s..."
+                sleep 10
+              done
+              echo "Model found. Proceeding to start vLLM."
+          volumeMounts:
+            - name: model-weights
+              mountPath: /models
+              readOnly: true
+
+      # =====================================================================
+      # Main Container: vLLM Inference Engine
+      # =====================================================================
+      containers:
+        - name: vllm
+          image: {{ include "vllm-inference.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          # -- Security
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+
+          # -- vLLM serve arguments
+          # IMPORTANT: pass the LOCAL model path (where the download Job wrote
+          # the weights on the PVC), NOT the HuggingFace repo id. Passing the
+          # repo id makes vLLM try to resolve config from HF at startup (and
+          # write to HF_HOME), which fails offline / on a read-only cache.
+          args:
+            - "{{ include "vllm-inference.modelPath" . }}"
+            - "--served-model-name"
+            - "{{ .Values.model.name }}"
+            - "--dtype"
+            - "{{ .Values.serving.dtype }}"
+            - "--max-model-len"
+            - "{{ .Values.serving.maxModelLen }}"
+            {{- if .Values.serving.enforceEager }}
+            - "--enforce-eager"
+            {{- end }}
+            - "--port"
+            - "{{ .Values.serving.port }}"
+            {{- range .Values.serving.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+
+          # -- Environment variables
+          env:
+            {{- range $key, $value := .Values.serving.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            # Load strictly from the local path; never reach out to the HF Hub.
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            # The pod runs as non-root (uid 1000) with no writable home. Many
+            # libraries default their caches to /.<tool> (root-owned, NOT
+            # writable) and crash: HF -> /.cache, Triton -> /.triton, vLLM ->
+            # /.cache/vllm. Point HOME and each cache at writable /tmp paths.
+            - name: HOME
+              value: "/tmp"
+            - name: HF_HOME
+              value: "/tmp/hf-cache"
+            - name: XDG_CACHE_HOME
+              value: "/tmp/.cache"
+            - name: TRITON_CACHE_DIR
+              value: "/tmp/.triton"
+            - name: VLLM_CACHE_ROOT
+              value: "/tmp/.cache/vllm"
+
+          # -- Ports
+          ports:
+            - name: http
+              containerPort: {{ .Values.serving.port }}
+              protocol: TCP
+
+          # -- Resource limits
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          # -- Health probes
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: {{ .Values.probes.readiness.port }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: {{ .Values.probes.liveness.port }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+
+          # -- Volume mounts
+          volumeMounts:
+            - name: model-weights
+              mountPath: /models
+              readOnly: true
+            - name: dshm
+              mountPath: /dev/shm
+
+      # =====================================================================
+      # Volumes
+      # =====================================================================
+      volumes:
+        # Model weights from PVC (downloaded by Job)
+        - name: model-weights
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "vllm-inference.pvcName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        # Shared memory for vLLM inter-process communication
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.shmSize }}
