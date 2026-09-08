@@ -1,0 +1,49 @@
+# =============================================================================
+# kagent test agent — proves inference routes to our self-hosted vLLM
+# =============================================================================
+# A minimal Declarative agent. It uses default-model-config, which points at
+# our in-cluster prod vLLM (Qwen2.5-0.5B-Instruct), so every reasoning call
+# goes to the self-hosted model — no cloud LLM. a2aConfig exposes it over the
+# controller's A2A HTTP endpoint so we can send it a prompt.
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: inferentia-helper
+  namespace: kagent
+  labels:
+    app.kubernetes.io/part-of: inferentia
+spec:
+  type: Declarative
+  description: "Simple assistant that answers questions using the self-hosted Inferentia vLLM (Qwen2.5-0.5B)."
+  declarative:
+    modelConfig: default-model-config
+    shareTools: false
+    # MCP tools: attach a small set of READ-ONLY k8s tools from kagent's built-in
+    # MCP tool server (kagent-tool-server, 124 tools total). Kept minimal so the
+    # 0.5B model isn't overwhelmed choosing among tools. This lets the agent
+    # answer real questions about the live cluster (e.g. "list pods in
+    # inference-prod") by calling the cluster via MCP.
+    tools:
+      - type: McpServer
+        mcpServer:
+          kind: RemoteMCPServer
+          apiGroup: kagent.dev
+          name: kagent-tool-server
+          toolNames:
+            - k8s_get_resources
+            - k8s_describe_resource
+            - k8s_get_events
+    systemMessage: |
+      You are Inferentia Helper, a concise assistant running on a self-hosted
+      Qwen2.5-0.5B model served by vLLM on EKS. You have read-only Kubernetes
+      tools available via MCP. When asked about cluster state (pods, nodes,
+      events), call the k8s_get_resources tool with the right resource type and
+      namespace, then summarize the result briefly. If asked what model or
+      infrastructure you run on, say you run on a self-hosted vLLM deployment,
+      not a cloud LLM API.
+    a2aConfig:
+      skills:
+        - id: general-qa
+          name: General Q&A
+          description: Answer general questions concisely.
+          tags: ["qa", "demo"]

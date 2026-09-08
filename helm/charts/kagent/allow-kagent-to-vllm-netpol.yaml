@@ -1,0 +1,35 @@
+# =============================================================================
+# NetworkPolicy — allow kagent agents to reach the prod vLLM
+# =============================================================================
+# inference-prod runs a default-deny-ingress + an allow-list that only permits
+# port 8000 from the gateway/monitoring namespaces and same-namespace pods.
+# kagent agent pods live in the `kagent` namespace, so their calls to the vLLM
+# OpenAI endpoint were dropped (i/o timeout). This adds a narrow allow rule:
+# ingress to the vLLM pods on :8000 from the kagent namespace only.
+#
+# This is additive and least-privilege — it does NOT open vLLM to the world,
+# just to the agent control plane that needs it. Demonstrates extending the
+# segmentation baseline for a new, governed consumer.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm-prod-allow-kagent-ingress
+  namespace: inference-prod
+  labels:
+    app.kubernetes.io/part-of: inferentia
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vllm-inference
+      app.kubernetes.io/instance: vllm-prod
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kagent
+      ports:
+        - protocol: TCP
+          port: 8000
