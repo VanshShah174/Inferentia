@@ -26,7 +26,10 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: vllm-prod-vllm-inference # release vllm-prod + chart vllm-inference
-  minReplicaCount: 2 # llm-d routing needs >=2 pods to route between; hold at 2
+  minReplicaCount: 1 # promoted prod is a single signed replica; KEDA scales up
+  # on load (proven in task 6). The llm-d routing demo's 2 pods come from a
+  # SEPARATE deployment (helm/charts/llm-d/10-prod-2replicas.yaml), not KEDA,
+  # so KEDA no longer needs to hold prod at 2 (which fought the RWO PVC).
   maxReplicaCount: 3 # bounded for the demo cluster's capacity
   cooldownPeriod: 60 # shorter for the demo so scale-down is observable
   pollingInterval: 15 # query Prometheus every 15s

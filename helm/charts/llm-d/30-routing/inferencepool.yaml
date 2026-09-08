@@ -4,7 +4,7 @@
 # Points at the REAL production workload (inference-prod), not a synthetic pool
 # — the whole point is to prove cache-aware routing on the promoted, signed
 # prod deployment. Gateway API Inference Extension v1.6.0.
-#   selector          -> prod's vLLM pods (2 co-located replicas)
+#   selector          -> prod's vLLM pods (the promoted vllm-prod deployment)
 #   targetPorts       -> vLLM :8000
 #   endpointPickerRef -> the EPP Service that scores/picks a pod per request
 apiVersion: inference.networking.k8s.io/v1
