@@ -35,13 +35,15 @@ model:
   s3Key: "Qwen2.5-0.5B-Instruct/"
 
 # -- vLLM Serving Configuration (production tuned)
-# replicas: 2 — required for the llm-d cache-aware routing demo: the EPP must
-# have >1 pod to choose between. Both replicas co-locate on one node (see
-# affinity below) so they can share the ReadWriteOnce model PVC read-only.
-# --enable-prefix-caching (extraArgs) makes KV-cache reuse observable, which is
-# what the EPP's prefix-hash routing keys on. KVCACHE 2 fits the 8Gi limit.
+# replicas: 1 — the promoted prod deployment is a single signed replica backed
+# by a ReadWriteOnce model PVC. The llm-d cache-aware routing demo does NOT
+# mutate this deployment: it runs its own independent 2-replica deployment
+# (helm/charts/llm-d/10-prod-2replicas.yaml, emptyDir + per-pod S3 download) in
+# this same namespace, which the InferencePool selects. That keeps the GitOps
+# promotion story pristine and avoids sharing an RWO volume across replicas.
+# --enable-prefix-caching stays on (harmless, and consistent with the demo pods).
 serving:
-  replicas: 2
+  replicas: 1
   dtype: "bfloat16"
   maxModelLen: 2048
   enforceEager: true
@@ -92,23 +94,10 @@ nodeSelector: {}
 
 tolerations: []
 
-# -- Affinity: CO-LOCATE the 2 replicas on the SAME node (REQUIRED here).
-# The model PVC is ReadWriteOnce (EBS) — two replicas can only mount it (even
-# read-only) if they're on the same node. So we use podAffinity (attract to the
-# same node), NOT anti-affinity. requiredDuringScheduling makes it hard: the 2nd
-# replica MUST land where the 1st is. A t3.large (2 vCPU) fits both at 750m req.
-# (Prod intent on real multi-node HA would use ReadWriteMany/EFS + anti-affinity
-# to spread across AZs — documented trade-off for the demo cluster.)
-affinity:
-  podAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-      - labelSelector:
-          matchExpressions:
-            - key: app.kubernetes.io/name
-              operator: In
-              values:
-                - vllm-inference
-        topologyKey: kubernetes.io/hostname
+# -- Affinity: none for the single promoted prod replica. (The llm-d demo's
+# separate 2-replica deployment handles its own placement via independent
+# emptyDir volumes, so no co-location/anti-affinity juggling is needed here.)
+affinity: {}
 
 # -- NetworkPolicy: INHERITED from values.yaml (enabled: true, same gateway /
 # prometheus / dns / egress selectors as every EKS env). Not repeated here
