@@ -67,16 +67,29 @@ jobs:
       - name: Resolve image reference (by digest from ECR)
         id: ref
         run: |
+          # The artifact under promotion is NOT tagged with this PR's github.sha
+          # — in a promotion there is NO rebuild, so github.sha (the ppd->main
+          # merge commit) has no image. The image was built + signed on an
+          # earlier branch and its tag is recorded as the prod imageTag in the
+          # ApplicationSet (the deployer's source of truth for what prod runs).
+          # Read that tag and verify THAT exact artifact.
+          PROMO_TAG=$(grep -A6 'env: prod' argocd/appsets/vllm-appset.yaml \
+            | grep 'imageTag:' | head -1 | sed -E 's/.*imageTag:[[:space:]]*"?([^"]+)"?.*/\1/')
+          echo "Prod imageTag from ApplicationSet: ${PROMO_TAG}"
+          if [ -z "${PROMO_TAG}" ]; then
+            echo "::error::Could not read prod imageTag from argocd/appsets/vllm-appset.yaml"
+            exit 1
+          fi
           if [ "${{ vars.REGISTRY_ENABLED }}" = "true" ]; then
             DIGEST=$(aws ecr describe-images \
               --repository-name inferentia/vllm-cpu \
-              --image-ids imageTag=${{ github.sha }} \
+              --image-ids imageTag="${PROMO_TAG}" \
               --region "${AWS_REGION}" \
               --query 'imageDetails[0].imageDigest' --output text)
             REF="${{ env.IMAGE_NAME }}@${DIGEST}"
           else
-            REF="${{ env.IMAGE_NAME }}:${{ github.sha }}"
-            echo "::warning::REGISTRY_ENABLED != true — using SHA tag (registry not wired)."
+            REF="${{ env.IMAGE_NAME }}:${PROMO_TAG}"
+            echo "::warning::REGISTRY_ENABLED != true — using tag ref (registry not wired)."
           fi
           echo "image_ref=${REF}" >> "$GITHUB_OUTPUT"
           echo "Promotion target: ${REF}"
