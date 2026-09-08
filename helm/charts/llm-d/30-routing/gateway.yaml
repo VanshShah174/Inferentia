@@ -1,0 +1,20 @@
+# =============================================================================
+# Gateway — the ingress that fronts the inference pool
+# =============================================================================
+# gatewayClassName must match the installed controller's GatewayClass. We use
+# kgateway (purpose-built for the Inference Extension, lighter than full Istio).
+# If you install Istio instead, set gatewayClassName: istio.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: llmd-gateway
+  namespace: inference-prod
+  labels:
+    app.kubernetes.io/part-of: inferentia
+spec:
+  gatewayClassName: kgateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+

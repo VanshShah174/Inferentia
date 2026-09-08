@@ -35,17 +35,19 @@ model:
   s3Key: "Qwen2.5-0.5B-Instruct/"
 
 # -- vLLM Serving Configuration (production tuned)
-# Demo-cluster sizing: prod intent is replicas 2 + cpu req 4, but the demo runs
-# on a shared 3-node t3.large group (2 vCPU each) already hosting dev+qa+ppd.
-# replicas: 1 proves the signed-artifact promotion; KVCACHE 2 fits the 8Gi
-# limit (4Gi failed engine init). Restore replicas 2 / cpu 4 / KVCACHE 4 on a
-# real prod node group.
+# replicas: 2 — required for the llm-d cache-aware routing demo: the EPP must
+# have >1 pod to choose between. Both replicas co-locate on one node (see
+# affinity below) so they can share the ReadWriteOnce model PVC read-only.
+# --enable-prefix-caching (extraArgs) makes KV-cache reuse observable, which is
+# what the EPP's prefix-hash routing keys on. KVCACHE 2 fits the 8Gi limit.
 serving:
-  replicas: 1
+  replicas: 2
   dtype: "bfloat16"
   maxModelLen: 2048
   enforceEager: true
   port: 8000
+  extraArgs:
+    - "--enable-prefix-caching"
   env:
     VLLM_CPU_KVCACHE_SPACE: "2"
     VLLM_TARGET_DEVICE: "cpu"
@@ -90,19 +92,23 @@ nodeSelector: {}
 
 tolerations: []
 
-# -- Affinity (spread pods across AZs)
+# -- Affinity: CO-LOCATE the 2 replicas on the SAME node (REQUIRED here).
+# The model PVC is ReadWriteOnce (EBS) — two replicas can only mount it (even
+# read-only) if they're on the same node. So we use podAffinity (attract to the
+# same node), NOT anti-affinity. requiredDuringScheduling makes it hard: the 2nd
+# replica MUST land where the 1st is. A t3.large (2 vCPU) fits both at 750m req.
+# (Prod intent on real multi-node HA would use ReadWriteMany/EFS + anti-affinity
+# to spread across AZs — documented trade-off for the demo cluster.)
 affinity:
-  podAntiAffinity:
-    preferredDuringSchedulingIgnoredDuringExecution:
-      - weight: 100
-        podAffinityTerm:
-          labelSelector:
-            matchExpressions:
-              - key: app.kubernetes.io/name
-                operator: In
-                values:
-                  - vllm-inference
-          topologyKey: topology.kubernetes.io/zone
+  podAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+                - vllm-inference
+        topologyKey: kubernetes.io/hostname
 
 # -- NetworkPolicy: INHERITED from values.yaml (enabled: true, same gateway /
 # prometheus / dns / egress selectors as every EKS env). Not repeated here

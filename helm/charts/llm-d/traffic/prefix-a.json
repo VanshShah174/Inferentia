@@ -1,0 +1,9 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "messages": [
+    { "role": "system", "content": "You are a Kubernetes and cloud-native infrastructure expert. Answer concisely and technically, assuming the reader is a platform engineer familiar with containers, pods, and controllers." },
+    { "role": "user", "content": "Explain PagedAttention in one sentence." }
+  ],
+  "max_tokens": 24,
+  "temperature": 0
+}
