@@ -1,6 +1,6 @@
 # Inferentia
 
-**A production-grade, self-hosted LLM inference platform on Amazon EKS** — proving where standard DevOps practice applies unchanged to AI workloads and where it must be extended for a workload that batches requests, holds per-request state in memory, and scales on token throughput rather than request rate.
+**A self-hosted, end-to-end LLM inference platform on Amazon EKS** — exploring where standard DevOps practice applies unchanged to AI workloads and where it must be extended for a workload that batches requests, holds per-request state in memory, and scales on token throughput rather than request rate.
 
 > **The workload changed. The discipline didn't.**
 
@@ -224,9 +224,11 @@ This makes vLLM enable tool-calling (`--enable-auto-tool-choice --tool-call-pars
 
 ## Documentation
 
+- 📘 **[LLM Inference Infrastructure — A DevOps Reference (PDF)](docs/LLM_Inference_Infrastructure_Reference.pdf)** — a full reference on how LLM inference works end to end, from GPU silicon up through Kubernetes, and every DevOps concept in between. Maps the *production-scale* architecture (GPU, disaggregated prefill/decode, RDMA); this build implements the CPU-served slice of it.
 - [Architecture & request lifecycle](docs/architecture.md)
 - [Architecture decision records](docs/decisions.md)
 - [Trade-offs & honest limitations](docs/trade-offs.md)
+- [Hurdles & lessons (the honest engineering log)](docs/Hurdles-and-Lessons.md)
 - [KV cache & cache-aware routing](docs/kv-cache-and-routing.md)
 - [SSDLC / DevSecOps](docs/SSDLC-DevSecOps.md)
 - [Keyless OIDC auth](docs/OIDC-Keyless-Auth.md)
